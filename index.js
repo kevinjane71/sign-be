@@ -912,6 +912,272 @@ app.delete('/api/documents/:documentId', async (req, res) => {
   }
 });
 
+// Create sharing workflow configuration
+app.post('/api/documents/:documentId/share', async (req, res) => {
+  try {
+    const { documentId } = req.params;
+    const { signers, workflowType, message, senderName, senderEmail } = req.body;
+
+    // Validate input
+    if (!signers || signers.length === 0) {
+      return res.status(400).json({ error: 'At least one signer is required' });
+    }
+
+    // Validate signers
+    for (const signer of signers) {
+      if (!signer.name || !signer.email || !signer.role) {
+        return res.status(400).json({ error: 'All signers must have name, email, and role' });
+      }
+      if (!['sign', 'review'].includes(signer.role)) {
+        return res.status(400).json({ error: 'Signer role must be either "sign" or "review"' });
+      }
+    }
+
+    // Validate workflow type
+    const validWorkflowTypes = ['parallel', 'sequential', 'custom'];
+    if (!validWorkflowTypes.includes(workflowType)) {
+      return res.status(400).json({ error: 'Invalid workflow type' });
+    }
+
+    // Get document data
+    const docRef = db.collection('documents').doc(documentId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    // Prepare signers with additional metadata
+    const processedSigners = signers.map((signer, index) => ({
+      ...signer,
+      id: crypto.randomUUID(),
+      signed: false,
+      order: workflowType === 'sequential' ? index + 1 : 0,
+      addedAt: new Date().toISOString()
+    }));
+
+    // Update document with sharing configuration
+    await docRef.update({
+      signers: processedSigners,
+      workflowType: workflowType,
+      message: message || '',
+      senderName: senderName,
+      senderEmail: senderEmail,
+      status: 'configured',
+      configuredAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
+      lastModified: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Sharing configuration saved successfully',
+      signers: processedSigners,
+      workflowType: workflowType
+    });
+  } catch (error) {
+    console.error('Share configuration error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Send document with workflow
+app.post('/api/documents/:documentId/send-workflow', async (req, res) => {
+  try {
+    const { documentId } = req.params;
+
+    // Get document data
+    const docRef = db.collection('documents').doc(documentId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const documentData = doc.data();
+    
+    if (!documentData.signers || documentData.signers.length === 0) {
+      return res.status(400).json({ error: 'No signers configured for this document' });
+    }
+
+    // Determine which signers to notify based on workflow type
+    let signersToNotify = [];
+    
+    switch (documentData.workflowType) {
+      case 'parallel':
+        // Send to all signers simultaneously
+        signersToNotify = documentData.signers;
+        break;
+      
+      case 'sequential':
+        // Send only to the first signer in order
+        signersToNotify = documentData.signers
+          .filter(s => !s.signed)
+          .sort((a, b) => a.order - b.order)
+          .slice(0, 1);
+        break;
+      
+      case 'custom':
+        // For now, treat custom like parallel
+        signersToNotify = documentData.signers.filter(s => !s.signed);
+        break;
+      
+      default:
+        signersToNotify = documentData.signers;
+    }
+
+    // Update document status
+    await docRef.update({
+      status: 'sent',
+      sentAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
+      currentStep: documentData.workflowType === 'sequential' ? 1 : 0
+    });
+
+    // Log email details (email sending is disabled)
+    console.log('📧 Email sending temporarily disabled - would send to signers:');
+    signersToNotify.forEach(signer => {
+      const signingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}`;
+      console.log(`   📩 ${signer.name} (${signer.email}) - Role: ${signer.role}: ${signingUrl}`);
+    });
+
+    res.json({ 
+      success: true, 
+      message: `Document sent successfully using ${documentData.workflowType} workflow`,
+      notifiedSigners: signersToNotify.length,
+      totalSigners: documentData.signers.length,
+      workflowType: documentData.workflowType
+    });
+  } catch (error) {
+    console.error('Send workflow error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get sharing configuration for a document
+app.get('/api/documents/:documentId/share', async (req, res) => {
+  try {
+    const { documentId } = req.params;
+
+    const docRef = db.collection('documents').doc(documentId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const documentData = doc.data();
+
+    res.json({ 
+      success: true, 
+      document: {
+        id: documentId,
+        name: documentData.originalName,
+        status: documentData.status,
+        signers: documentData.signers || [],
+        workflowType: documentData.workflowType || 'parallel',
+        message: documentData.message || '',
+        senderName: documentData.senderName,
+        senderEmail: documentData.senderEmail,
+        fields: documentData.fields || [],
+        pages: documentData.pages || 1
+      }
+    });
+  } catch (error) {
+    console.error('Get sharing configuration error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Update signer in workflow
+app.put('/api/documents/:documentId/signers/:signerId', async (req, res) => {
+  try {
+    const { documentId, signerId } = req.params;
+    const { name, email, role } = req.body;
+
+    // Validate input
+    if (!name || !email || !role) {
+      return res.status(400).json({ error: 'Name, email, and role are required' });
+    }
+
+    if (!['sign', 'review'].includes(role)) {
+      return res.status(400).json({ error: 'Role must be either "sign" or "review"' });
+    }
+
+    // Get document data
+    const docRef = db.collection('documents').doc(documentId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const documentData = doc.data();
+    
+    // Find and update the signer
+    const updatedSigners = documentData.signers.map(signer => {
+      if (signer.id === signerId) {
+        return {
+          ...signer,
+          name,
+          email,
+          role,
+          lastModified: new Date().toISOString()
+        };
+      }
+      return signer;
+    });
+
+    // Update document
+    await docRef.update({
+      signers: updatedSigners,
+      lastModified: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Signer updated successfully',
+      signers: updatedSigners
+    });
+  } catch (error) {
+    console.error('Update signer error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Remove signer from workflow
+app.delete('/api/documents/:documentId/signers/:signerId', async (req, res) => {
+  try {
+    const { documentId, signerId } = req.params;
+
+    // Get document data
+    const docRef = db.collection('documents').doc(documentId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const documentData = doc.data();
+    
+    // Remove the signer
+    const updatedSigners = documentData.signers.filter(signer => signer.id !== signerId);
+
+    // Update document
+    await docRef.update({
+      signers: updatedSigners,
+      lastModified: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Signer removed successfully',
+      signers: updatedSigners
+    });
+  } catch (error) {
+    console.error('Remove signer error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 SignApp Backend running on port ${PORT}`);
   console.log(`📊 Mode: ${isLocalMode ? 'LOCAL DEVELOPMENT' : 'PRODUCTION'}`);
