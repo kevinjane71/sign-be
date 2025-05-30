@@ -50,7 +50,7 @@ Before running this application, make sure you have:
 3. **Environment Setup**
    Create a `.env` file in the root directory:
    ```env
-   PORT=5001
+   PORT=5002
    NODE_ENV=development
    
    # Firebase Configuration
@@ -98,13 +98,13 @@ npm run dev
 npm start
 ```
 
-The server will start on `http://localhost:5001` (or your specified PORT).
+The server will start on `http://localhost:5002` (or your specified PORT).
 
 ## 📚 API Documentation
 
 ### Base URL
 ```
-http://localhost:5001/api
+http://localhost:5002/api
 ```
 
 ### Endpoints
@@ -283,7 +283,7 @@ pm2 start ecosystem.config.js
 ### Using Docker
 ```bash
 docker build -t signbe .
-docker run -p 5001:5001 --env-file .env signbe
+docker run -p 5002:5002 --env-file .env signbe
 ```
 
 ### Environment Variables for Production

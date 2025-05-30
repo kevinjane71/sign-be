@@ -11,7 +11,7 @@ const path = require('path');
 const fs = require('fs');
 
 const app = express();
-const PORT = process.env.PORT || 5001;
+const PORT = process.env.PORT || 5002;
 
 // Setup CORS with more permissive options
 app.use(cors({
@@ -290,9 +290,15 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
     const documentId = crypto.randomUUID();
     const fileName = `documents/${documentId}/${req.file.originalname}`;
     
+    // Extract additional fields from request body
+    const title = req.body.title || req.file.originalname;
+    const fields = req.body.fields ? JSON.parse(req.body.fields) : [];
+    const mimeType = req.body.mimeType || req.file.mimetype;
+    
     if (isLocalMode) {
       // Local development mode - save file to local storage
       console.log(`📁 Local upload: ${req.file.originalname} (${req.file.size} bytes)`);
+      console.log(`📋 Fields: ${fields.length} fields`);
       
       // Save file to local storage
       await bucket.file(fileName).save(req.file.buffer, {
@@ -306,14 +312,15 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
       const documentData = {
         id: documentId,
         originalName: req.file.originalname,
+        title: title,
         fileName: fileName,
         fileUrl: fileUrl,
-        mimeType: req.file.mimetype,
+        mimeType: mimeType,
         size: req.file.size,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         status: 'draft',
-        fields: [],
+        fields: fields,
         signers: [],
         pages: [{ url: fileUrl, pageNumber: 1 }]
       };
@@ -344,14 +351,15 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
       const documentData = {
         id: documentId,
         originalName: req.file.originalname,
+        title: title,
         fileName: fileName,
         fileUrl: fileUrl,
-        mimeType: req.file.mimetype,
+        mimeType: mimeType,
         size: req.file.size,
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
         status: 'draft',
-        fields: [],
+        fields: fields,
         signers: [],
         pages: [{ url: fileUrl, pageNumber: 1 }]
       };
@@ -617,7 +625,7 @@ app.post('/api/documents/:documentId/send', async (req, res) => {
       // Log email details instead of sending
       console.log('📧 Email sending temporarily disabled - would send to signers:');
       documentData.signers.forEach(signer => {
-        const signingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}`;
+        const signingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3003'}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}`;
         console.log(`   📩 ${signer.name} (${signer.email}): ${signingUrl}`);
       });
     // }
