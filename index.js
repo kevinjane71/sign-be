@@ -287,6 +287,13 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
+    console.log('=== UPLOAD ENDPOINT DEBUG ===');
+    console.log('Request body keys:', Object.keys(req.body));
+    console.log('Raw signers:', req.body.signers);
+    console.log('Raw subject:', req.body.subject);
+    console.log('Raw message:', req.body.message);
+    console.log('Raw configuration:', req.body.configuration);
+
     const documentId = crypto.randomUUID();
     const fileName = `documents/${documentId}/${req.file.originalname}`;
     
@@ -295,10 +302,50 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
     const fields = req.body.fields ? JSON.parse(req.body.fields) : [];
     const mimeType = req.body.mimeType || req.file.mimetype;
     
+    // Parse additional form data
+    let signers = [];
+    let subject = '';
+    let message = '';
+    let configuration = {};
+    
+    try {
+      signers = req.body.signers ? JSON.parse(req.body.signers) : [];
+      console.log('Parsed signers:', signers);
+    } catch (e) {
+      console.error('Error parsing signers:', e);
+    }
+    
+    try {
+      subject = req.body.subject || '';
+      console.log('Parsed subject:', subject);
+    } catch (e) {
+      console.error('Error parsing subject:', e);
+    }
+    
+    try {
+      message = req.body.message || '';
+      console.log('Parsed message:', message);
+    } catch (e) {
+      console.error('Error parsing message:', e);
+    }
+    
+    try {
+      configuration = req.body.configuration ? JSON.parse(req.body.configuration) : {};
+      console.log('Parsed configuration:', configuration);
+    } catch (e) {
+      console.error('Error parsing configuration:', e);
+    }
+    
+    console.log('=== END DEBUG ===');
+    
     if (isLocalMode) {
       // Local development mode - save file to local storage
       console.log(`📁 Local upload: ${req.file.originalname} (${req.file.size} bytes)`);
       console.log(`📋 Fields: ${fields.length} fields`);
+      console.log(`👥 Signers: ${signers.length} signers`);
+      console.log(`📧 Subject: ${subject}`);
+      console.log(`💬 Message: ${message}`);
+      console.log(`⚙️ Configuration:`, configuration);
       
       // Save file to local storage
       await bucket.file(fileName).save(req.file.buffer, {
@@ -308,7 +355,7 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
       // Create a local serving URL
       const fileUrl = `http://localhost:${PORT}/api/documents/${documentId}/file`;
       
-      // Save document metadata to mock database
+      // Save document metadata to mock database with all form data
       const documentData = {
         id: documentId,
         originalName: req.file.originalname,
@@ -321,7 +368,10 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
         updatedAt: new Date().toISOString(),
         status: 'draft',
         fields: fields,
-        signers: [],
+        signers: signers,
+        subject: subject,
+        message: message,
+        configuration: configuration,
         pages: [{ url: fileUrl, pageNumber: 1 }]
       };
 
@@ -347,7 +397,7 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
       // Create public URL (files in this bucket are publicly accessible)
       const fileUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
 
-      // Save document metadata to Firestore
+      // Save document metadata to Firestore with all form data
       const documentData = {
         id: documentId,
         originalName: req.file.originalname,
@@ -360,7 +410,10 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
         updatedAt: FieldValue.serverTimestamp(),
         status: 'draft',
         fields: fields,
-        signers: [],
+        signers: signers,
+        subject: subject,
+        message: message,
+        configuration: configuration,
         pages: [{ url: fileUrl, pageNumber: 1 }]
       };
 
@@ -473,6 +526,25 @@ app.put('/api/documents/:documentId/fields', async (req, res) => {
   }
 });
 
+// Update entire document (general PUT endpoint)
+app.put('/api/documents/:documentId', async (req, res) => {
+  try {
+    const { documentId } = req.params;
+    const updateData = req.body;
+
+    // Add timestamp
+    updateData.updatedAt = isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp();
+
+    const docRef = db.collection('documents').doc(documentId);
+    await docRef.update(updateData);
+
+    res.json({ success: true, message: 'Document updated successfully' });
+  } catch (error) {
+    console.error('Update document error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Add signers to document
 app.put('/api/documents/:documentId/signers', async (req, res) => {
   try {
@@ -500,7 +572,22 @@ app.put('/api/documents/:documentId/signers', async (req, res) => {
 app.post('/api/documents/:documentId/send', async (req, res) => {
   try {
     const { documentId } = req.params;
-    const { message, senderName, senderEmail } = req.body;
+    const { 
+      fields, 
+      signers, 
+      subject, 
+      message, 
+      configuration = {} 
+    } = req.body;
+
+    console.log('=== SEND ENDPOINT DEBUG ===');
+    console.log('Document ID:', documentId);
+    console.log('Request body keys:', Object.keys(req.body));
+    console.log('Signers received:', signers);
+    console.log('Signers type:', typeof signers);
+    console.log('Signers is array:', Array.isArray(signers));
+    console.log('Signers length:', signers ? signers.length : 'undefined');
+    console.log('=== END DEBUG ===');
 
     // Get document data
     const docRef = db.collection('documents').doc(documentId);
@@ -512,22 +599,40 @@ app.post('/api/documents/:documentId/send', async (req, res) => {
 
     const documentData = doc.data();
     
-    if (!documentData.signers || documentData.signers.length === 0) {
-      return res.status(400).json({ error: 'No signers added to document' });
+    // Validate signers
+    if (!signers || !Array.isArray(signers) || signers.length === 0) {
+      return res.status(400).json({ error: 'No signers provided' });
     }
 
-    // Update document status
-    await docRef.update({
+    // Update document with all the new data
+    const updateData = {
       status: 'sent',
       sentAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
-      senderName: senderName,
-      senderEmail: senderEmail,
-      message: message
-    });
+      subject: subject || `Signature Request: ${documentData.originalName}`,
+      message: message || '',
+      updatedAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
+    };
+
+    // Update fields if provided
+    if (fields && Array.isArray(fields)) {
+      updateData.fields = fields;
+    }
+
+    // Update signers if provided
+    if (signers && Array.isArray(signers)) {
+      updateData.signers = signers;
+    }
+
+    // Update configuration if provided
+    if (configuration && typeof configuration === 'object') {
+      updateData.configuration = configuration;
+    }
+
+    await docRef.update(updateData);
 
     // Send emails to all signers - TEMPORARILY DISABLED
     // if (emailTransporter) {
-    //   const emailPromises = documentData.signers.map(async (signer) => {
+    //   const emailPromises = signers.map(async (signer) => {
     //     const signingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}`;
         
     //     const emailHtml = `
@@ -555,7 +660,7 @@ app.post('/api/documents/:documentId/send', async (req, res) => {
                 
     //             <div style="background-color: #F3F4F6; border-left: 4px solid #4F46E5; padding: 16px; margin: 24px 0; border-radius: 4px;">
     //               <p style="font-size: 16px; color: #4B5563; margin: 0;">
-    //                 <strong style="color: #4F46E5;">${senderName || senderEmail}</strong> has sent you a document that requires your signature.
+    //                 <strong style="color: #4F46E5;">Document Owner</strong> has sent you a document that requires your signature.
     //               </p>
     //             </div>
 
@@ -613,7 +718,7 @@ app.post('/api/documents/:documentId/send', async (req, res) => {
     //     const mailOptions = {
     //       from: process.env.GODADY_EMAIL_SNAPYFORM,
     //       to: signer.email,
-    //       subject: `📝 Signature Request: ${documentData.originalName}`,
+    //       subject: subject || `📝 Signature Request: ${documentData.originalName}`,
     //       html: emailHtml
     //     };
 
@@ -624,7 +729,7 @@ app.post('/api/documents/:documentId/send', async (req, res) => {
     // } else {
       // Log email details instead of sending
       console.log('📧 Email sending temporarily disabled - would send to signers:');
-      documentData.signers.forEach(signer => {
+      signers.forEach(signer => {
         const signingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3003'}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}`;
         console.log(`   📩 ${signer.name} (${signer.email}): ${signingUrl}`);
       });
@@ -633,7 +738,7 @@ app.post('/api/documents/:documentId/send', async (req, res) => {
     res.json({ 
       success: true, 
       message: 'Document sent successfully to all signers',
-      signerCount: documentData.signers.length
+      signerCount: signers.length
     });
   } catch (error) {
     console.error('Send document error:', error);
