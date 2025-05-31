@@ -13,6 +13,14 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 5002;
 
+// Multer configuration for file uploads
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 50 * 1024 * 1024 // 50MB limit
+  }
+});
+
 // Setup CORS with more permissive options
 app.use(cors({
   origin: '*',
@@ -267,41 +275,29 @@ let emailTransporter;
   console.log('⚠️  Email service temporarily disabled - emails will be logged to console');
 // }
 
-// Multer configuration for file uploads
-const upload = multer({ 
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 50 * 1024 * 1024 // 50MB limit
-  }
-});
-
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'API running fine', timestamp: new Date().toISOString() });
 });
 
-// Upload document endpoint
-app.post('/api/documents/upload', upload.single('document'), async (req, res) => {
+// Upload document endpoint - Modified to support multiple files under single document ID
+app.post('/api/documents/upload', upload.any(), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
+    // Filter files from the uploaded data
+    const files = req.files ? req.files.filter(file => file.fieldname === 'documents') : [];
+    
+    if (!files || files.length === 0) {
+      return res.status(400).json({ error: 'No files uploaded' });
     }
 
     console.log('=== UPLOAD ENDPOINT DEBUG ===');
+    console.log('Number of files:', files.length);
     console.log('Request body keys:', Object.keys(req.body));
     console.log('Raw signers:', req.body.signers);
     console.log('Raw subject:', req.body.subject);
     console.log('Raw message:', req.body.message);
     console.log('Raw configuration:', req.body.configuration);
 
-    const documentId = crypto.randomUUID();
-    const fileName = `documents/${documentId}/${req.file.originalname}`;
-    
-    // Extract additional fields from request body
-    const title = req.body.title || req.file.originalname;
-    const fields = req.body.fields ? JSON.parse(req.body.fields) : [];
-    const mimeType = req.body.mimeType || req.file.mimetype;
-    
     // Parse additional form data
     let signers = [];
     let subject = '';
@@ -337,95 +333,105 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
     }
     
     console.log('=== END DEBUG ===');
+
+    // Create a single document ID for all files
+    const documentId = crypto.randomUUID();
+    const uploadedFiles = [];
     
-    if (isLocalMode) {
-      // Local development mode - save file to local storage
-      console.log(`📁 Local upload: ${req.file.originalname} (${req.file.size} bytes)`);
-      console.log(`📋 Fields: ${fields.length} fields`);
-      console.log(`👥 Signers: ${signers.length} signers`);
-      console.log(`📧 Subject: ${subject}`);
-      console.log(`💬 Message: ${message}`);
-      console.log(`⚙️ Configuration:`, configuration);
+    // Process each file
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const fileId = crypto.randomUUID(); // Unique ID for each file
+      const fileName = `documents/${documentId}/${fileId}_${file.originalname}`;
       
-      // Save file to local storage
-      await bucket.file(fileName).save(req.file.buffer, {
-        contentType: req.file.mimetype
-      });
+      // Extract fields for this specific document (if provided)
+      const fieldsKey = `fields_${i}`;
+      const fields = req.body[fieldsKey] ? JSON.parse(req.body[fieldsKey]) : [];
       
-      // Create a local serving URL
-      const fileUrl = `http://localhost:${PORT}/api/documents/${documentId}/file`;
+      const title = req.body[`title_${i}`] || file.originalname;
+      const mimeType = req.body[`mimeType_${i}`] || file.mimetype;
       
-      // Save document metadata to mock database with all form data
-      const documentData = {
-        id: documentId,
-        originalName: req.file.originalname,
-        title: title,
-        fileName: fileName,
-        fileUrl: fileUrl,
-        mimeType: mimeType,
-        size: req.file.size,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        status: 'draft',
-        fields: fields,
-        signers: signers,
-        subject: subject,
-        message: message,
-        configuration: configuration,
-        pages: [{ url: fileUrl, pageNumber: 1 }]
-      };
+      if (isLocalMode) {
+        // Local development mode - save file to local storage
+        console.log(`📁 Local upload ${i + 1}: ${file.originalname} (${file.size} bytes)`);
+        console.log(`📋 Fields: ${fields.length} fields`);
+        
+        // Save file to local storage
+        await bucket.file(fileName).save(file.buffer, {
+          contentType: file.mimetype
+        });
+        
+        // Create a local serving URL
+        const fileUrl = `http://localhost:${PORT}/api/documents/${documentId}/file/${fileId}`;
+        
+        // Add file info to the files array
+        uploadedFiles.push({
+          fileId: fileId,
+          originalName: file.originalname,
+          title: title,
+          fileName: fileName,
+          fileUrl: fileUrl,
+          mimeType: mimeType,
+          size: file.size,
+          fields: fields,
+          order: i
+        });
+        
+      } else {
+        // Production mode - save to Google Cloud Storage with public URL
+        const file_gcs = bucket.file(fileName);
+        
+        // Save file to Google Cloud Storage
+        await file_gcs.save(file.buffer, {
+          metadata: {
+            contentType: file.mimetype,
+          },
+        });
 
-      await db.collection('documents').doc(documentId).set(documentData);
+        // Create public URL (files in this bucket are publicly accessible)
+        const fileUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
 
-      res.json({
-        success: true,
-        documentId,
-        fileUrl: fileUrl,
-        document: documentData
-      });
-    } else {
-      // Production mode - save to Google Cloud Storage with public URL
-      const file = bucket.file(fileName);
-      
-      // Save file to Google Cloud Storage
-      await file.save(req.file.buffer, {
-        metadata: {
-          contentType: req.file.mimetype,
-        },
-      });
-
-      // Create public URL (files in this bucket are publicly accessible)
-      const fileUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
-
-      // Save document metadata to Firestore with all form data
-      const documentData = {
-        id: documentId,
-        originalName: req.file.originalname,
-        title: title,
-        fileName: fileName,
-        fileUrl: fileUrl,
-        mimeType: mimeType,
-        size: req.file.size,
-        createdAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-        status: 'draft',
-        fields: fields,
-        signers: signers,
-        subject: subject,
-        message: message,
-        configuration: configuration,
-        pages: [{ url: fileUrl, pageNumber: 1 }]
-      };
-
-      await db.collection('documents').doc(documentId).set(documentData);
-
-      res.json({
-        success: true,
-        documentId,
-        fileUrl: fileUrl,
-        document: documentData
-      });
+        // Add file info to the files array
+        uploadedFiles.push({
+          fileId: fileId,
+          originalName: file.originalname,
+          title: title,
+          fileName: fileName,
+          fileUrl: fileUrl,
+          mimeType: mimeType,
+          size: file.size,
+          fields: fields,
+          order: i
+        });
+      }
     }
+
+    // Create the main document record with all files
+    const documentData = {
+      id: documentId,
+      title: subject || `Document with ${files.length} files`,
+      files: uploadedFiles,
+      totalFiles: files.length,
+      createdAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
+      updatedAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
+      status: 'draft',
+      signers: signers,
+      subject: subject,
+      message: message,
+      configuration: configuration
+    };
+
+    // Save main document to database
+    await db.collection('documents').doc(documentId).set(documentData);
+
+    // Return response with the single document containing all files
+    res.json({
+      success: true,
+      documentId: documentId,
+      document: documentData,
+      totalFiles: files.length
+    });
+    
   } catch (error) {
     console.error('Upload endpoint error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -485,6 +491,61 @@ app.get('/api/documents/:documentId/file', async (req, res) => {
   }
 });
 
+// Serve individual file from multi-file document
+app.get('/api/documents/:documentId/file/:fileId', async (req, res) => {
+  try {
+    const { documentId, fileId } = req.params;
+    
+    // Get document metadata
+    const docRef = db.collection('documents').doc(documentId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const documentData = doc.data();
+    
+    // Find the specific file in the files array
+    const fileInfo = documentData.files?.find(file => file.fileId === fileId);
+    
+    if (!fileInfo) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    // Set proper headers for file serving
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Content-Type', fileInfo.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${fileInfo.originalName}"`);
+
+    if (isLocalMode) {
+      // Serve from local storage
+      try {
+        const [fileBuffer] = await bucket.file(fileInfo.fileName).download();
+        res.send(fileBuffer);
+      } catch (error) {
+        console.error('Local file serving error:', error);
+        res.status(404).json({ error: 'File not found in local storage' });
+      }
+    } else {
+      // Serve from Google Cloud Storage
+      try {
+        const file = bucket.file(fileInfo.fileName);
+        const [fileBuffer] = await file.download();
+        res.send(fileBuffer);
+      } catch (error) {
+        console.error('GCS file serving error:', error);
+        res.status(404).json({ error: 'File not found in storage' });
+      }
+    }
+  } catch (error) {
+    console.error('Individual file serving error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Get document by ID
 app.get('/api/documents/:documentId', async (req, res) => {
   try {
@@ -532,8 +593,51 @@ app.put('/api/documents/:documentId', async (req, res) => {
     const { documentId } = req.params;
     const updateData = req.body;
 
+    console.log('=== UPDATE DOCUMENT DEBUG ===');
+    console.log('Document ID:', documentId);
+    console.log('Update data keys:', Object.keys(updateData));
+    console.log('FileFields:', updateData.fileFields);
+    console.log('=== END DEBUG ===');
+
     // Add timestamp
     updateData.updatedAt = isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp();
+
+    // Handle fileFields for multi-file documents
+    if (updateData.fileFields && Array.isArray(updateData.fileFields)) {
+      // Get current document data
+      const docRef = db.collection('documents').doc(documentId);
+      const doc = await docRef.get();
+
+      if (!doc.exists) {
+        return res.status(404).json({ error: 'Document not found' });
+      }
+
+      const documentData = doc.data();
+      
+      // Update fields in the files array
+      const updatedFiles = documentData.files.map(file => {
+        // Find fields for this file
+        const fileFieldData = updateData.fileFields.find(ff => ff.fileId === file.fileId);
+        
+        if (fileFieldData) {
+          return {
+            ...file,
+            fields: fileFieldData.fields || []
+          };
+        }
+        
+        return file;
+      });
+
+      // Remove fileFields from updateData and add the updated files
+      delete updateData.fileFields;
+      updateData.files = updatedFiles;
+
+      console.log('Updated files with fields:', updatedFiles.map(f => ({ 
+        fileId: f.fileId, 
+        fieldsCount: f.fields?.length || 0 
+      })));
+    }
 
     const docRef = db.collection('documents').doc(documentId);
     await docRef.update(updateData);
@@ -574,6 +678,7 @@ app.post('/api/documents/:documentId/send', async (req, res) => {
     const { documentId } = req.params;
     const { 
       fields, 
+      fileFields,
       signers, 
       subject, 
       message, 
@@ -583,6 +688,7 @@ app.post('/api/documents/:documentId/send', async (req, res) => {
     console.log('=== SEND ENDPOINT DEBUG ===');
     console.log('Document ID:', documentId);
     console.log('Request body keys:', Object.keys(req.body));
+    console.log('FileFields:', fileFields);
     console.log('Signers received:', signers);
     console.log('Signers type:', typeof signers);
     console.log('Signers is array:', Array.isArray(signers));
@@ -608,13 +714,36 @@ app.post('/api/documents/:documentId/send', async (req, res) => {
     const updateData = {
       status: 'sent',
       sentAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
-      subject: subject || `Signature Request: ${documentData.originalName}`,
+      subject: subject || `Signature Request: ${documentData.title || 'Document'}`,
       message: message || '',
       updatedAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
     };
 
-    // Update fields if provided
-    if (fields && Array.isArray(fields)) {
+    // Handle fileFields for multi-file documents
+    if (fileFields && Array.isArray(fileFields)) {
+      // Update fields in the files array
+      const updatedFiles = documentData.files.map(file => {
+        // Find fields for this file
+        const fileFieldData = fileFields.find(ff => ff.fileId === file.fileId);
+        
+        if (fileFieldData) {
+          return {
+            ...file,
+            fields: fileFieldData.fields || []
+          };
+        }
+        
+        return file;
+      });
+
+      updateData.files = updatedFiles;
+
+      console.log('Updated files with fields for sending:', updatedFiles.map(f => ({ 
+        fileId: f.fileId, 
+        fieldsCount: f.fields?.length || 0 
+      })));
+    } else if (fields && Array.isArray(fields)) {
+      // Legacy single-file support
       updateData.fields = fields;
     }
 
@@ -679,7 +808,7 @@ app.post('/api/documents/:documentId/send', async (req, res) => {
     //                 </div>
     //                 <div>
     //                   <p style="margin: 0; font-size: 14px; color: #6B7280;">Document</p>
-    //                   <p style="margin: 0; font-size: 16px; font-weight: 500; color: #111827;">${documentData.originalName}</p>
+    //                   <p style="margin: 0; font-size: 16px; font-weight: 500; color: #111827;">${documentData.title || documentData.originalName || 'Document'}</p>
     //                 </div>
     //               </div>
     //               <div style="display: flex; align-items: center;">
