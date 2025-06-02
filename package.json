@@ -1,0 +1,27 @@
+{
+  "name": "signbe",
+  "version": "1.0.0",
+  "description": "Backend for document signing application",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "echo \"Error: no test specified\" && exit 11"
+  },
+  "keywords": ["document", "signing", "docusign", "api"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "multer": "^1.4.5-lts.1",
+    "dotenv": "^16.3.1",
+    "@google-cloud/storage": "^7.7.0",
+    "firebase-admin": "^12.0.0",
+    "nodemailer": "^6.9.8",
+    "crypto": "^1.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+} 

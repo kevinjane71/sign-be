@@ -145,7 +145,6 @@ firebase-debug.*.log
 # Google Cloud
 gcloud-key.json
 service-account-key.json
-*.json
 
 # Uploads directory (if storing files locally)
 uploads/
@@ -175,3 +174,6 @@ Dockerfile.dev
 *.backup
 *.bak
 *.tmp .env.example
+# Specific JSON files to ignore
+gcloud-key.json
+service-account-key.json
