@@ -1424,7 +1424,7 @@ app.delete('/api/documents/:documentId/signers/:signerId', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 SignApp Backend running on port ${PORT}`);
-  console.log(`📊 Mode: ${isLocalMode ? 'LOCAL DEVELOPMENT' : 'PRODUCTION'}`);
+  console.log(`📊 Mode: ${isLocalMode ? 'LOCAL DEVELOPMENT1' : 'PRODUCTION'}`);
   console.log(`🔗 Health check: http://localhost:${PORT}/health`);
   if (isLocalMode) {
     console.log('📝 Note: Running in local mode with proper file serving');
