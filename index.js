@@ -1461,29 +1461,44 @@ app.post('/meetflow/auth/email-login', async (req, res) => {
       });
     }
 
-    // In a real app, you would verify password against hashed password in database
-    // For now, we'll create a simple mock authentication
-    const userData = {
-      id: `user_${Date.now()}`,
-      email: email,
-      name: email.split('@')[0], // Use email prefix as name
-      authMethod: 'email',
-      loginTime: new Date().toISOString()
-    };
+    // Check if user exists in database
+    const usersRef = db.collection('users');
+    const userQuery = await usersRef.where('email', '==', email).get();
 
-    // Store user in database (mock for now)
-    if (!isLocalMode) {
-      await db.collection('users').doc(userData.id).set({
-        ...userData,
-        createdAt: FieldValue.serverTimestamp(),
-        lastLogin: FieldValue.serverTimestamp()
+    if (userQuery.empty) {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'Invalid email or password' 
       });
     }
+
+    let userData = null;
+    userQuery.forEach(doc => {
+      userData = { id: doc.id, ...doc.data() };
+    });
+
+    // In a real app, you would verify password against hashed password
+    // For now, we'll use a simple check (you should implement proper password hashing)
+    if (userData.password !== password) {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'Invalid email or password' 
+      });
+    }
+
+    // Update last login time
+    await db.collection('users').doc(userData.id).update({
+      lastLogin: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
+    });
+
+    // Return user data without password
+    const { password: _, ...userResponse } = userData;
+    userResponse.loginTime = new Date().toISOString();
 
     res.json({
       success: true,
       message: 'Login successful',
-      data: userData
+      data: userResponse
     });
   } catch (error) {
     console.error('Email login error:', error);
@@ -1513,28 +1528,47 @@ app.post('/meetflow/auth/email-signup', async (req, res) => {
       });
     }
 
-    // In a real app, you would hash the password and check if user exists
-    const userData = {
-      id: `user_${Date.now()}`,
-      email: email,
-      name: name,
-      authMethod: 'email',
-      signupTime: new Date().toISOString()
-    };
-
-    // Store user in database (mock for now)
-    if (!isLocalMode) {
-      await db.collection('users').doc(userData.id).set({
-        ...userData,
-        createdAt: FieldValue.serverTimestamp(),
-        lastLogin: FieldValue.serverTimestamp()
+    if (password.length < 6) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Password must be at least 6 characters long' 
       });
     }
+
+    // Check if user already exists
+    const usersRef = db.collection('users');
+    const existingUserQuery = await usersRef.where('email', '==', email).get();
+
+    if (!existingUserQuery.empty) {
+      return res.status(409).json({ 
+        success: false, 
+        error: 'User with this email already exists' 
+      });
+    }
+
+    // Create new user
+    const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const userData = {
+      id: userId,
+      email: email,
+      name: name,
+      password: password, // In production, hash this password!
+      authMethod: 'email',
+      createdAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
+      lastLogin: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
+    };
+
+    // Store user in database
+    await db.collection('users').doc(userId).set(userData);
+
+    // Return user data without password
+    const { password: _, ...userResponse } = userData;
+    userResponse.signupTime = new Date().toISOString();
 
     res.json({
       success: true,
       message: 'Account created successfully',
-      data: userData
+      data: userResponse
     });
   } catch (error) {
     console.error('Email signup error:', error);
@@ -1557,24 +1591,74 @@ app.post('/meetflow/auth/google', async (req, res) => {
       });
     }
 
-    // In a real app, you would exchange the code for tokens and get user info
-    // For now, we'll create a mock response
-    const userData = {
-      id: `google_user_${Date.now()}`,
-      email: 'user@gmail.com', // This would come from Google API
-      name: 'Google User', // This would come from Google API
-      authMethod: 'google',
-      loginTime: new Date().toISOString()
-    };
+    // Exchange code for access token
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        client_id: '1087929121342-sq0cd1gq0oo85ond6c11in1u83spc0mv.apps.googleusercontent.com',
+        client_secret: process.env.GOOGLE_CLIENT_SECRET || 'your-google-client-secret',
+        code: code,
+        grant_type: 'authorization_code',
+        redirect_uri: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`,
+      }),
+    });
 
-    // Store user in database (mock for now)
-    if (!isLocalMode) {
-      await db.collection('users').doc(userData.id).set({
-        ...userData,
-        createdAt: FieldValue.serverTimestamp(),
-        lastLogin: FieldValue.serverTimestamp()
+    const tokenData = await tokenResponse.json();
+
+    if (!tokenData.access_token) {
+      throw new Error('Failed to get access token from Google');
+    }
+
+    // Get user info from Google
+    const userResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: {
+        Authorization: `Bearer ${tokenData.access_token}`,
+      },
+    });
+
+    const googleUser = await userResponse.json();
+
+    if (!googleUser.email) {
+      throw new Error('Failed to get user info from Google');
+    }
+
+    // Check if user exists in our database
+    const usersRef = db.collection('users');
+    const userQuery = await usersRef.where('email', '==', googleUser.email).get();
+
+    let userData;
+
+    if (userQuery.empty) {
+      // Create new user
+      const userId = `google_user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      userData = {
+        id: userId,
+        email: googleUser.email,
+        name: googleUser.name || googleUser.email.split('@')[0],
+        picture: googleUser.picture,
+        authMethod: 'google',
+        googleId: googleUser.id,
+        createdAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
+        lastLogin: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
+      };
+
+      await db.collection('users').doc(userId).set(userData);
+    } else {
+      // Update existing user
+      userQuery.forEach(doc => {
+        userData = { id: doc.id, ...doc.data() };
+      });
+
+      await db.collection('users').doc(userData.id).update({
+        lastLogin: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
+        picture: googleUser.picture // Update profile picture if changed
       });
     }
+
+    userData.loginTime = new Date().toISOString();
 
     res.json({
       success: true,
@@ -1585,7 +1669,7 @@ app.post('/meetflow/auth/google', async (req, res) => {
     console.error('Google auth error:', error);
     res.status(500).json({ 
       success: false, 
-      error: 'Internal server error' 
+      error: 'Google authentication failed' 
     });
   }
 });
@@ -1602,24 +1686,40 @@ app.post('/meetflow/auth/phone', async (req, res) => {
       });
     }
 
-    // In a real app, you would verify the Firebase ID token
-    // For now, we'll create a mock response
-    const userData = {
-      id: `phone_user_${Date.now()}`,
-      phone: phone,
-      name: `User ${phone.slice(-4)}`, // Use last 4 digits as name
-      authMethod: 'phone',
-      loginTime: new Date().toISOString()
-    };
+    // In a real app, you would verify the Firebase ID token here
+    // For now, we'll trust the frontend verification
+    
+    // Check if user exists in our database
+    const usersRef = db.collection('users');
+    const userQuery = await usersRef.where('phone', '==', phone).get();
 
-    // Store user in database (mock for now)
-    if (!isLocalMode) {
-      await db.collection('users').doc(userData.id).set({
-        ...userData,
-        createdAt: FieldValue.serverTimestamp(),
-        lastLogin: FieldValue.serverTimestamp()
+    let userData;
+
+    if (userQuery.empty) {
+      // Create new user
+      const userId = `phone_user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      userData = {
+        id: userId,
+        phone: phone,
+        name: `User ${phone.slice(-4)}`,
+        authMethod: 'phone',
+        createdAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
+        lastLogin: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
+      };
+
+      await db.collection('users').doc(userId).set(userData);
+    } else {
+      // Update existing user
+      userQuery.forEach(doc => {
+        userData = { id: doc.id, ...doc.data() };
+      });
+
+      await db.collection('users').doc(userData.id).update({
+        lastLogin: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
       });
     }
+
+    userData.loginTime = new Date().toISOString();
 
     res.json({
       success: true,
@@ -1647,20 +1747,35 @@ app.get('/meetflow/auth/profile', async (req, res) => {
       });
     }
 
-    // In a real app, you would verify the JWT token
-    // For now, we'll return a mock profile
-    const userData = {
-      id: 'user_123',
-      email: 'user@example.com',
-      name: 'John Doe',
-      authMethod: 'email',
-      lastLogin: new Date().toISOString()
-    };
+    const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+    
+    // In a real app, you would verify the JWT token here
+    // For now, we'll use the token as user ID for simplicity
+    
+    try {
+      const userDoc = await db.collection('users').doc(token).get();
+      
+      if (!userDoc.exists) {
+        return res.status(404).json({ 
+          success: false, 
+          error: 'User not found' 
+        });
+      }
 
-    res.json({
-      success: true,
-      data: userData
-    });
+      const userData = userDoc.data();
+      // Remove password from response
+      const { password, ...userResponse } = userData;
+
+      res.json({
+        success: true,
+        data: userResponse
+      });
+    } catch (error) {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'Invalid token' 
+      });
+    }
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ 
@@ -1674,6 +1789,25 @@ app.get('/meetflow/auth/profile', async (req, res) => {
 app.post('/meetflow/auth/logout', async (req, res) => {
   try {
     // In a real app, you might invalidate tokens or update last logout time
+    const authHeader = req.headers.authorization;
+    
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      
+      try {
+        // Update last logout time if user exists
+        const userDoc = await db.collection('users').doc(token).get();
+        if (userDoc.exists) {
+          await db.collection('users').doc(token).update({
+            lastLogout: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
+          });
+        }
+      } catch (error) {
+        // Ignore errors during logout cleanup
+        console.log('Logout cleanup error:', error);
+      }
+    }
+
     res.json({
       success: true,
       message: 'Logout successful'
