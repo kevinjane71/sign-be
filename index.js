@@ -1447,6 +1447,246 @@ app.delete('/api/documents/:documentId/signers/:signerId', async (req, res) => {
   }
 });
 
+// ==================== AUTHENTICATION ENDPOINTS ====================
+
+// Email Login
+app.post('/meetflow/auth/email-login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Email and password are required' 
+      });
+    }
+
+    // In a real app, you would verify password against hashed password in database
+    // For now, we'll create a simple mock authentication
+    const userData = {
+      id: `user_${Date.now()}`,
+      email: email,
+      name: email.split('@')[0], // Use email prefix as name
+      authMethod: 'email',
+      loginTime: new Date().toISOString()
+    };
+
+    // Store user in database (mock for now)
+    if (!isLocalMode) {
+      await db.collection('users').doc(userData.id).set({
+        ...userData,
+        createdAt: FieldValue.serverTimestamp(),
+        lastLogin: FieldValue.serverTimestamp()
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Login successful',
+      data: userData
+    });
+  } catch (error) {
+    console.error('Email login error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
+    });
+  }
+});
+
+// Email Signup
+app.post('/meetflow/auth/email-signup', async (req, res) => {
+  try {
+    const { email, password, name, confirmPassword } = req.body;
+
+    if (!email || !password || !name || !confirmPassword) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'All fields are required' 
+      });
+    }
+
+    if (password !== confirmPassword) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Passwords do not match' 
+      });
+    }
+
+    // In a real app, you would hash the password and check if user exists
+    const userData = {
+      id: `user_${Date.now()}`,
+      email: email,
+      name: name,
+      authMethod: 'email',
+      signupTime: new Date().toISOString()
+    };
+
+    // Store user in database (mock for now)
+    if (!isLocalMode) {
+      await db.collection('users').doc(userData.id).set({
+        ...userData,
+        createdAt: FieldValue.serverTimestamp(),
+        lastLogin: FieldValue.serverTimestamp()
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Account created successfully',
+      data: userData
+    });
+  } catch (error) {
+    console.error('Email signup error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
+    });
+  }
+});
+
+// Google OAuth
+app.post('/meetflow/auth/google', async (req, res) => {
+  try {
+    const { code } = req.body;
+
+    if (!code) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Authorization code is required' 
+      });
+    }
+
+    // In a real app, you would exchange the code for tokens and get user info
+    // For now, we'll create a mock response
+    const userData = {
+      id: `google_user_${Date.now()}`,
+      email: 'user@gmail.com', // This would come from Google API
+      name: 'Google User', // This would come from Google API
+      authMethod: 'google',
+      loginTime: new Date().toISOString()
+    };
+
+    // Store user in database (mock for now)
+    if (!isLocalMode) {
+      await db.collection('users').doc(userData.id).set({
+        ...userData,
+        createdAt: FieldValue.serverTimestamp(),
+        lastLogin: FieldValue.serverTimestamp()
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Google authentication successful',
+      data: userData
+    });
+  } catch (error) {
+    console.error('Google auth error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
+    });
+  }
+});
+
+// Phone Authentication
+app.post('/meetflow/auth/phone', async (req, res) => {
+  try {
+    const { phone, idToken } = req.body;
+
+    if (!phone || !idToken) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Phone number and ID token are required' 
+      });
+    }
+
+    // In a real app, you would verify the Firebase ID token
+    // For now, we'll create a mock response
+    const userData = {
+      id: `phone_user_${Date.now()}`,
+      phone: phone,
+      name: `User ${phone.slice(-4)}`, // Use last 4 digits as name
+      authMethod: 'phone',
+      loginTime: new Date().toISOString()
+    };
+
+    // Store user in database (mock for now)
+    if (!isLocalMode) {
+      await db.collection('users').doc(userData.id).set({
+        ...userData,
+        createdAt: FieldValue.serverTimestamp(),
+        lastLogin: FieldValue.serverTimestamp()
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Phone authentication successful',
+      data: userData
+    });
+  } catch (error) {
+    console.error('Phone auth error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
+    });
+  }
+});
+
+// Get user profile
+app.get('/meetflow/auth/profile', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'Authorization token required' 
+      });
+    }
+
+    // In a real app, you would verify the JWT token
+    // For now, we'll return a mock profile
+    const userData = {
+      id: 'user_123',
+      email: 'user@example.com',
+      name: 'John Doe',
+      authMethod: 'email',
+      lastLogin: new Date().toISOString()
+    };
+
+    res.json({
+      success: true,
+      data: userData
+    });
+  } catch (error) {
+    console.error('Get profile error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
+    });
+  }
+});
+
+// Logout (mainly for cleanup)
+app.post('/meetflow/auth/logout', async (req, res) => {
+  try {
+    // In a real app, you might invalidate tokens or update last logout time
+    res.json({
+      success: true,
+      message: 'Logout successful'
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 SignApp Backend running on port ${PORT}`);
   console.log(`📊 Mode: ${isLocalMode ? 'LOCAL DEVELOPMENT1' : 'PRODUCTION'}`);
