@@ -40,15 +40,56 @@ let isLocalMode = false;
 // Local file storage path - declare at top level but only create directory in local mode
 const localStoragePath = path.join(__dirname, 'uploads');
 
+// Function to set up mock storage
+function setupMockStorage() {
+  // Create uploads directory only when needed
+  if (!fs.existsSync(localStoragePath)) {
+    fs.mkdirSync(localStoragePath, { recursive: true });
+  }
+  
+  return {
+    file: (fileName) => ({
+      save: async (buffer, options) => {
+        const filePath = path.join(localStoragePath, fileName);
+        const dir = path.dirname(filePath);
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+        fs.writeFileSync(filePath, buffer);
+        return Promise.resolve();
+      },
+      createWriteStream: () => {
+        const stream = require('stream').Writable({
+          write(chunk, encoding, callback) {
+            callback();
+          }
+        });
+        
+        // Simulate successful upload
+        setTimeout(() => {
+          stream.emit('finish');
+        }, 100);
+        
+        return stream;
+      },
+      makePublic: async () => Promise.resolve(),
+      delete: async () => Promise.resolve(),
+      download: async () => {
+        const filePath = path.join(localStoragePath, fileName);
+        if (fs.existsSync(filePath)) {
+          return [fs.readFileSync(filePath)];
+        }
+        throw new Error('File not found');
+      }
+    }),
+    name: 'local-mock-bucket'
+  };
+}
+
 // Check if we're in local development mode first
 if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_PRIVATE_KEY || !process.env.FIREBASE_CLIENT_EMAIL) {
   console.log('🔧 Running in LOCAL DEVELOPMENT MODE - Firebase disabled');
   isLocalMode = true;
-  
-  // Only create uploads directory in local development mode
-  if (!fs.existsSync(localStoragePath)) {
-    fs.mkdirSync(localStoragePath, { recursive: true });
-  }
   
   // Mock database for local development
   const mockDatabase = new Map();
@@ -182,43 +223,7 @@ if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_PRIVATE_KEY || !pr
   };
   
   // Mock storage for local development
-  bucket = {
-    file: (fileName) => ({
-      save: async (buffer, options) => {
-        const filePath = path.join(localStoragePath, fileName);
-        const dir = path.dirname(filePath);
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
-        }
-        fs.writeFileSync(filePath, buffer);
-        return Promise.resolve();
-      },
-      createWriteStream: () => {
-        const stream = require('stream').Writable({
-          write(chunk, encoding, callback) {
-            callback();
-          }
-        });
-        
-        // Simulate successful upload
-        setTimeout(() => {
-          stream.emit('finish');
-        }, 100);
-        
-        return stream;
-      },
-      makePublic: async () => Promise.resolve(),
-      delete: async () => Promise.resolve(),
-      download: async () => {
-        const filePath = path.join(localStoragePath, fileName);
-        if (fs.existsSync(filePath)) {
-          return [fs.readFileSync(filePath)];
-        }
-        throw new Error('File not found');
-      }
-    }),
-    name: 'local-mock-bucket'
-  };
+  bucket = setupMockStorage();
 } else {
   console.log('🔧 Running in PRODUCTION MODE - Firebase enabled');
   
@@ -236,20 +241,40 @@ if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_PRIVATE_KEY || !pr
     
     // Initialize Google Cloud Storage using the working pattern
     if (process.env.NODE_ENV === 'production') {
-      // For Vercel
-      const serviceAccount = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
-      storage = new Storage({
-        projectId: serviceAccount.project_id,
-        credentials: {
-          client_email: serviceAccount.client_email,
-          private_key: serviceAccount.private_key
+      // For Vercel - check if Google Cloud credentials are provided
+      if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+        try {
+          const serviceAccount = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
+          storage = new Storage({
+            projectId: serviceAccount.project_id,
+            credentials: {
+              client_email: serviceAccount.client_email,
+              private_key: serviceAccount.private_key
+            }
+          });
+          bucket = storage.bucket('demoimage-7189');
+          console.log('✅ Google Cloud Storage initialized successfully');
+        } catch (parseError) {
+          console.error('❌ Error parsing Google Cloud credentials JSON:', parseError.message);
+          console.log('🔧 Falling back to local storage mode in production');
+          isLocalMode = true;
         }
-      });
+      } else {
+        console.log('⚠️  GOOGLE_APPLICATION_CREDENTIALS_JSON not provided');
+        console.log('🔧 Running in local storage mode (production)');
+        isLocalMode = true;
+      }
     } else {
       // For local development
       storage = new Storage();
+      bucket = storage.bucket('demoimage-7189');
     }
-    bucket = storage.bucket('demoimage-7189');
+    
+    // If we're in local mode (either by design or fallback), set up mock storage
+    if (isLocalMode) {
+      // Mock storage for local development or production fallback
+      bucket = setupMockStorage();
+    }
   } catch (error) {
     console.error('Firebase initialization error:', error);
     process.exit(1);
