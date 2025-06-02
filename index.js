@@ -5,13 +5,20 @@ const cors = require('cors');
 const { Storage } = require('@google-cloud/storage');
 const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore, FieldValue } = require('firebase-admin/firestore');
+const { google } = require('googleapis');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
 
 const app = express();
 const PORT = process.env.PORT || 5002;
+
+// JWT Secret - in production, use a strong secret from environment variables
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
 
 // Multer configuration for file uploads
 const upload = multer({ 
@@ -87,8 +94,11 @@ function setupMockStorage() {
 }
 
 // Check if we're in local development mode first
-if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_PRIVATE_KEY || !process.env.FIREBASE_CLIENT_EMAIL) {
-  console.log('🔧 Running in LOCAL DEVELOPMENT MODE - Firebase disabled');
+// Use production mode when Firebase environment variables are properly configured
+const isLocalDevelopment = !process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_PRIVATE_KEY || !process.env.FIREBASE_CLIENT_EMAIL;
+
+if (isLocalDevelopment) {
+  console.log('🔧 Running in LOCAL DEVELOPMENT MODE - Using Firestore without complex queries');
   isLocalMode = true;
   
   // Mock database for local development
@@ -162,7 +172,127 @@ if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_PRIVATE_KEY || !pr
             forEach: (callback) => docs.forEach(callback),
             size: docs.length
           };
-        }
+        },
+        limit: (limitCount) => ({
+          get: async () => {
+            const docs = Array.from(mockDatabase.entries())
+              .filter(([key]) => key.startsWith(`${name}/`))
+              .filter(([key, data]) => {
+                switch (operator) {
+                  case '==':
+                    return data[field] === value;
+                  case '!=':
+                    return data[field] !== value;
+                  case '>':
+                    return data[field] > value;
+                  case '<':
+                    return data[field] < value;
+                  case '>=':
+                    return data[field] >= value;
+                  case '<=':
+                    return data[field] <= value;
+                  default:
+                    return true;
+                }
+              })
+              .map(([key, value]) => ({ 
+                id: key.split('/')[1], 
+                data: () => value 
+              }))
+              .slice(0, limitCount); // Apply limit
+            return { 
+              forEach: (callback) => docs.forEach(callback),
+              size: docs.length
+            };
+          }
+        }),
+        where: (field2, operator2, value2) => ({
+          get: async () => {
+            const docs = Array.from(mockDatabase.entries())
+              .filter(([key]) => key.startsWith(`${name}/`))
+              .filter(([key, data]) => {
+                // First condition
+                let firstMatch = false;
+                switch (operator) {
+                  case '==':
+                    firstMatch = data[field] === value;
+                    break;
+                  case '!=':
+                    firstMatch = data[field] !== value;
+                    break;
+                  default:
+                    firstMatch = true;
+                }
+                
+                // Second condition
+                let secondMatch = false;
+                switch (operator2) {
+                  case '==':
+                    secondMatch = data[field2] === value2;
+                    break;
+                  case '!=':
+                    secondMatch = data[field2] !== value2;
+                    break;
+                  default:
+                    secondMatch = true;
+                }
+                
+                return firstMatch && secondMatch;
+              })
+              .map(([key, value]) => ({ 
+                id: key.split('/')[1], 
+                data: () => value 
+              }));
+            return { 
+              forEach: (callback) => docs.forEach(callback),
+              size: docs.length
+            };
+          },
+          limit: (limitCount) => ({
+            get: async () => {
+              const docs = Array.from(mockDatabase.entries())
+                .filter(([key]) => key.startsWith(`${name}/`))
+                .filter(([key, data]) => {
+                  // First condition
+                  let firstMatch = false;
+                  switch (operator) {
+                    case '==':
+                      firstMatch = data[field] === value;
+                      break;
+                    case '!=':
+                      firstMatch = data[field] !== value;
+                      break;
+                    default:
+                      firstMatch = true;
+                  }
+                  
+                  // Second condition
+                  let secondMatch = false;
+                  switch (operator2) {
+                    case '==':
+                      secondMatch = data[field2] === value2;
+                      break;
+                    case '!=':
+                      secondMatch = data[field2] !== value2;
+                      break;
+                    default:
+                      secondMatch = true;
+                  }
+                  
+                  return firstMatch && secondMatch;
+                })
+                .map(([key, value]) => ({ 
+                  id: key.split('/')[1], 
+                  data: () => value 
+                }))
+                .slice(0, limitCount); // Apply limit
+              return { 
+                forEach: (callback) => docs.forEach(callback),
+                size: docs.length
+              };
+            }
+          })
+        })
       }),
       orderBy: (field, direction = 'asc') => ({
         limit: (limitCount) => ({
@@ -218,7 +348,12 @@ if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_PRIVATE_KEY || !pr
             size: docs.length
           };
         }
-      })
+      }),
+      add: async (data) => {
+        const id = `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        mockDatabase.set(`${name}/${id}`, { ...data, id });
+        return { id };
+      }
     })
   };
   
@@ -307,8 +442,209 @@ app.get('/health', (req, res) => {
   res.json({ status: 'API running fine', timestamp: new Date().toISOString() });
 });
 
-// Upload document endpoint - Modified to support multiple files under single document ID
-app.post('/api/documents/upload', upload.any(), async (req, res) => {
+// Authentication Middleware
+const authenticateToken = async (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      error: 'Access token required',
+      code: 'MISSING_TOKEN',
+      message: 'Please provide a valid access token in the Authorization header'
+    });
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    
+    // Get user from database to ensure they still exist and token is valid
+    const userDoc = await db.collection('users').doc(decoded.userId).get();
+    
+    if (!userDoc.exists) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid token',
+        code: 'USER_NOT_FOUND',
+        message: 'User associated with this token no longer exists'
+      });
+    }
+
+    const userData = userDoc.data();
+    
+    // Check if token is still valid (optional: implement token blacklisting)
+    if (userData.auth && userData.auth.accessToken !== token) {
+      return res.status(401).json({
+        success: false,
+        error: 'Token expired or invalid',
+        code: 'TOKEN_REVOKED',
+        message: 'This token has been revoked. Please login again to get a new token'
+      });
+    }
+
+    // Add user info to request object
+    req.user = {
+      userId: decoded.userId,
+      email: decoded.email,
+      name: decoded.name,
+      loginProvider: decoded.loginProvider
+    };
+
+    next();
+  } catch (error) {
+    console.error('Token verification error:', error);
+    
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        error: 'Token expired',
+        code: 'TOKEN_EXPIRED',
+        message: 'Your session has expired. Please login again.',
+        canRefresh: true
+      });
+    }
+    
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid token',
+        code: 'INVALID_TOKEN',
+        message: 'The provided token is invalid'
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      error: 'Authentication error',
+      code: 'AUTH_ERROR',
+      message: 'An error occurred while verifying your token'
+    });
+  }
+};
+
+// Optional middleware for endpoints that can work with or without authentication
+const optionalAuth = async (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      const userDoc = await db.collection('users').doc(decoded.userId).get();
+      
+      if (userDoc.exists) {
+        req.user = {
+          userId: decoded.userId,
+          email: decoded.email,
+          name: decoded.name,
+          loginProvider: decoded.loginProvider
+        };
+      }
+    } catch (error) {
+      // Ignore authentication errors for optional auth
+      console.log('Optional auth failed:', error.message);
+    }
+  }
+
+  next();
+};
+
+// Document ownership verification middleware
+const verifyDocumentOwnership = async (req, res, next) => {
+  try {
+    const { documentId } = req.params;
+    const userId = req.user.userId;
+
+    const docRef = db.collection('documents').doc(documentId);
+    const docSnapshot = await docRef.get();
+
+    if (!docSnapshot.exists) {
+      return res.status(404).json({
+        success: false,
+        error: 'Document not found',
+        message: 'The requested document does not exist'
+      });
+    }
+
+    const docData = docSnapshot.data();
+
+    // Check if user owns this document
+    if (docData.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied',
+        message: 'You do not have permission to access this document'
+      });
+    }
+
+    // Add document data to request for use in the endpoint
+    req.document = docData;
+    next();
+  } catch (error) {
+    console.error('Document ownership verification error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Authorization error',
+      message: 'An error occurred while verifying document access'
+    });
+  }
+};
+
+// Updated Token Manager class for JWT-based authentication
+class TokenManager {
+  constructor(database) {
+    this.db = database;
+  }
+
+  async generateTokens(userData) {
+    const payload = {
+      userId: userData.userId,
+      email: userData.email,
+      name: userData.name,
+      loginProvider: userData.loginProvider,
+      iat: Math.floor(Date.now() / 1000)
+    };
+
+    const accessToken = jwt.sign(payload, JWT_SECRET, { 
+      expiresIn: JWT_EXPIRES_IN,
+      issuer: 'sign4-app',
+      audience: 'sign4-users'
+    });
+
+    const refreshToken = jwt.sign(
+      { userId: userData.userId, type: 'refresh' }, 
+      JWT_SECRET, 
+      { expiresIn: '7d' }
+    );
+    
+    return {
+      accessToken,
+      refreshToken,
+      tokenType: 'Bearer',
+      expiresIn: JWT_EXPIRES_IN,
+      issuedAt: new Date().toISOString(),
+      userData: {
+        userId: userData.userId,
+        email: userData.email,
+        name: userData.name,
+        loginProvider: userData.loginProvider
+      }
+    };
+  }
+
+  async hashPassword(password) {
+    const saltRounds = 12;
+    return await bcrypt.hash(password, saltRounds);
+  }
+
+  async verifyPassword(password, hashedPassword) {
+    return await bcrypt.compare(password, hashedPassword);
+  }
+}
+
+// Upload document endpoint - Now requires authentication
+app.post('/api/documents/upload', authenticateToken, upload.any(), async (req, res) => {
   try {
     // Filter files from the uploaded data
     const files = req.files ? req.files.filter(file => file.fieldname === 'documents') : [];
@@ -436,6 +772,7 @@ app.post('/api/documents/upload', upload.any(), async (req, res) => {
     // Create the main document record with all files
     const documentData = {
       id: documentId,
+      userId: req.user.userId, // Associate document with authenticated user
       title: subject || `Document with ${files.length} files`,
       files: uploadedFiles,
       totalFiles: files.length,
@@ -445,7 +782,12 @@ app.post('/api/documents/upload', upload.any(), async (req, res) => {
       signers: signers,
       subject: subject,
       message: message,
-      configuration: configuration
+      configuration: configuration,
+      createdBy: {
+        userId: req.user.userId,
+        email: req.user.email,
+        name: req.user.name
+      }
     };
 
     // Save main document to database
@@ -465,20 +807,12 @@ app.post('/api/documents/upload', upload.any(), async (req, res) => {
   }
 });
 
-// Serve document file with proper CORS headers
-app.get('/api/documents/:documentId/file', async (req, res) => {
+// Serve document file with proper CORS headers - Now requires authentication
+app.get('/api/documents/:documentId/file', authenticateToken, verifyDocumentOwnership, async (req, res) => {
   try {
     const { documentId } = req.params;
-    
-    // Get document metadata
-    const docRef = db.collection('documents').doc(documentId);
-    const doc = await docRef.get();
+    const documentData = req.document; // From verifyDocumentOwnership middleware
 
-    if (!doc.exists) {
-      return res.status(404).json({ error: 'Document not found' });
-    }
-
-    const documentData = doc.data();
     const fileName = documentData.fileName;
 
     if (!fileName) {
@@ -488,29 +822,17 @@ app.get('/api/documents/:documentId/file', async (req, res) => {
     // Set proper headers for file serving
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     res.setHeader('Content-Type', documentData.mimeType || 'application/octet-stream');
     res.setHeader('Content-Disposition', `inline; filename="${documentData.originalName}"`);
 
-    if (isLocalMode) {
-      // Serve from local storage
-      try {
-        const [fileBuffer] = await bucket.file(fileName).download();
-        res.send(fileBuffer);
-      } catch (error) {
-        console.error('Local file serving error:', error);
-        res.status(404).json({ error: 'File not found in local storage' });
-      }
-    } else {
-      // Serve from Google Cloud Storage
-      try {
-        const file = bucket.file(fileName);
-        const [fileBuffer] = await file.download();
-        res.send(fileBuffer);
-      } catch (error) {
-        console.error('GCS file serving error:', error);
-        res.status(404).json({ error: 'File not found in storage' });
-      }
+    // Always serve file content directly to avoid CORS issues
+    try {
+      const [fileBuffer] = await bucket.file(fileName).download();
+      res.send(fileBuffer);
+    } catch (error) {
+      console.error('Error serving file:', error);
+      res.status(404).json({ error: 'File not found in storage' });
     }
   } catch (error) {
     console.error('File serving error:', error);
@@ -518,23 +840,14 @@ app.get('/api/documents/:documentId/file', async (req, res) => {
   }
 });
 
-// Serve individual file from multi-file document
-app.get('/api/documents/:documentId/file/:fileId', async (req, res) => {
+// Serve specific file by fileId - Now requires authentication
+app.get('/api/documents/:documentId/file/:fileId', authenticateToken, verifyDocumentOwnership, async (req, res) => {
   try {
     const { documentId, fileId } = req.params;
-    
-    // Get document metadata
-    const docRef = db.collection('documents').doc(documentId);
-    const doc = await docRef.get();
+    const documentData = req.document; // From verifyDocumentOwnership middleware
 
-    if (!doc.exists) {
-      return res.status(404).json({ error: 'Document not found' });
-    }
-
-    const documentData = doc.data();
-    
-    // Find the specific file in the files array
-    const fileInfo = documentData.files?.find(file => file.fileId === fileId);
+    // Find the specific file in the document's files array
+    const fileInfo = documentData.files?.find(f => f.fileId === fileId);
     
     if (!fileInfo) {
       return res.status(404).json({ error: 'File not found' });
@@ -543,56 +856,37 @@ app.get('/api/documents/:documentId/file/:fileId', async (req, res) => {
     // Set proper headers for file serving
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     res.setHeader('Content-Type', fileInfo.mimeType || 'application/octet-stream');
     res.setHeader('Content-Disposition', `inline; filename="${fileInfo.originalName}"`);
 
-    if (isLocalMode) {
-      // Serve from local storage
-      try {
-        const [fileBuffer] = await bucket.file(fileInfo.fileName).download();
-        res.send(fileBuffer);
-      } catch (error) {
-        console.error('Local file serving error:', error);
-        res.status(404).json({ error: 'File not found in local storage' });
-      }
-    } else {
-      // Serve from Google Cloud Storage
-      try {
-        const file = bucket.file(fileInfo.fileName);
-        const [fileBuffer] = await file.download();
-        res.send(fileBuffer);
-      } catch (error) {
-        console.error('GCS file serving error:', error);
-        res.status(404).json({ error: 'File not found in storage' });
-      }
+    // Always serve file content directly to avoid CORS issues
+    try {
+      const [fileBuffer] = await bucket.file(fileInfo.fileName).download();
+      res.send(fileBuffer);
+    } catch (error) {
+      console.error('Error serving file:', error);
+      res.status(404).json({ error: 'File not found in storage' });
     }
   } catch (error) {
-    console.error('Individual file serving error:', error);
+    console.error('File serving error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Get document by ID
-app.get('/api/documents/:documentId', async (req, res) => {
+// Get document by ID - Now requires authentication
+app.get('/api/documents/:documentId', authenticateToken, verifyDocumentOwnership, async (req, res) => {
   try {
-    const { documentId } = req.params;
-    const docRef = db.collection('documents').doc(documentId);
-    const doc = await docRef.get();
-
-    if (!doc.exists) {
-      return res.status(404).json({ error: 'Document not found' });
-    }
-
-    res.json({ success: true, document: doc.data() });
+    const documentData = req.document; // From verifyDocumentOwnership middleware
+    res.json({ success: true, document: documentData });
   } catch (error) {
     console.error('Get document error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Update document fields
-app.put('/api/documents/:documentId/fields', async (req, res) => {
+// Update document fields - Now requires authentication
+app.put('/api/documents/:documentId/fields', authenticateToken, verifyDocumentOwnership, async (req, res) => {
   try {
     const { documentId } = req.params;
     const { fields } = req.body;
@@ -614,8 +908,8 @@ app.put('/api/documents/:documentId/fields', async (req, res) => {
   }
 });
 
-// Update entire document (general PUT endpoint)
-app.put('/api/documents/:documentId', async (req, res) => {
+// Update entire document (general PUT endpoint) - Now requires authentication
+app.put('/api/documents/:documentId', authenticateToken, verifyDocumentOwnership, async (req, res) => {
   try {
     const { documentId } = req.params;
     const updateData = req.body;
@@ -631,15 +925,7 @@ app.put('/api/documents/:documentId', async (req, res) => {
 
     // Handle fileFields for multi-file documents
     if (updateData.fileFields && Array.isArray(updateData.fileFields)) {
-      // Get current document data
-      const docRef = db.collection('documents').doc(documentId);
-      const doc = await docRef.get();
-
-      if (!doc.exists) {
-        return res.status(404).json({ error: 'Document not found' });
-      }
-
-      const documentData = doc.data();
+      const documentData = req.document; // From verifyDocumentOwnership middleware
       
       // Update fields in the files array
       const updatedFiles = documentData.files.map(file => {
@@ -676,8 +962,8 @@ app.put('/api/documents/:documentId', async (req, res) => {
   }
 });
 
-// Add signers to document
-app.put('/api/documents/:documentId/signers', async (req, res) => {
+// Add signers to document - Now requires authentication
+app.put('/api/documents/:documentId/signers', authenticateToken, verifyDocumentOwnership, async (req, res) => {
   try {
     const { documentId } = req.params;
     const { signers } = req.body;
@@ -699,8 +985,8 @@ app.put('/api/documents/:documentId/signers', async (req, res) => {
   }
 });
 
-// Send document for signing
-app.post('/api/documents/:documentId/send', async (req, res) => {
+// Send document for signing - Now requires authentication
+app.post('/api/documents/:documentId/send', authenticateToken, verifyDocumentOwnership, async (req, res) => {
   try {
     const { documentId } = req.params;
     const { 
@@ -989,28 +1275,60 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
   }
 });
 
-// Get all documents (for dashboard)
-app.get('/api/documents', async (req, res) => {
+// Get all documents (for dashboard) - Now requires authentication and filters by user
+app.get('/api/documents', authenticateToken, async (req, res) => {
   try {
     const { page = 1, limit = 10, status } = req.query;
     const offset = (page - 1) * limit;
+    const userId = req.user.userId;
 
-    let query = db.collection('documents').orderBy('createdAt', 'desc');
+    console.log('=== DOCUMENTS ENDPOINT DEBUG ===');
+    console.log('User ID:', userId);
+    console.log('Page:', page, 'Limit:', limit, 'Status:', status);
+    console.log('Local mode:', isLocalMode);
+
+    let query = db.collection('documents').where('userId', '==', userId);
+    
+    // Use orderBy in production mode since composite index is now available
+    // In local mode, skip orderBy to avoid index requirements
+    if (!isLocalMode) {
+      query = query.orderBy('createdAt', 'desc');
+    }
     
     if (status) {
       query = query.where('status', '==', status);
     }
 
-    const snapshot = await query.limit(parseInt(limit)).offset(offset).get();
+    console.log('Executing query...');
+    const snapshot = await query.limit(parseInt(limit)).get();
+    console.log('Query executed, snapshot size:', snapshot.size);
+    
     const documents = [];
     
     snapshot.forEach(doc => {
-      documents.push({ id: doc.id, ...doc.data() });
+      const docData = doc.data();
+      documents.push({ id: doc.id, ...docData });
     });
 
-    // Get total count for pagination
-    const totalSnapshot = await db.collection('documents').get();
+    console.log('Documents processed:', documents.length);
+
+    // Get total count for pagination (user's documents only)
+    const totalQuery = db.collection('documents').where('userId', '==', userId);
+    const totalSnapshot = await totalQuery.get();
     const total = totalSnapshot.size;
+
+    console.log('Total documents for user:', total);
+
+    // Sort documents by createdAt in memory only in local mode
+    if (isLocalMode) {
+      documents.sort((a, b) => {
+        const aDate = new Date(a.createdAt);
+        const bDate = new Date(b.createdAt);
+        return bDate - aDate; // Descending order (newest first)
+      });
+    }
+
+    console.log('=== END DEBUG ===');
 
     res.json({ 
       success: true, 
@@ -1024,12 +1342,16 @@ app.get('/api/documents', async (req, res) => {
     });
   } catch (error) {
     console.error('Get documents error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ 
+      error: 'Internal server error',
+      details: isLocalMode ? error.message : 'Database query failed'
+    });
   }
 });
 
-// Update document status
-app.put('/api/documents/:documentId/status', async (req, res) => {
+// Update document status - Now requires authentication
+app.put('/api/documents/:documentId/status', authenticateToken, verifyDocumentOwnership, async (req, res) => {
   try {
     const { documentId } = req.params;
     const { status } = req.body;
@@ -1037,13 +1359,6 @@ app.put('/api/documents/:documentId/status', async (req, res) => {
     const validStatuses = ['draft', 'sent', 'partially_signed', 'completed', 'cancelled'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
-    }
-
-    const docRef = db.collection('documents').doc(documentId);
-    const doc = await docRef.get();
-
-    if (!doc.exists) {
-      return res.status(404).json({ error: 'Document not found' });
     }
 
     const updateData = {
@@ -1055,6 +1370,7 @@ app.put('/api/documents/:documentId/status', async (req, res) => {
       updateData.cancelledAt = isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp();
     }
 
+    const docRef = db.collection('documents').doc(documentId);
     await docRef.update(updateData);
 
     res.json({ success: true, message: 'Document status updated successfully' });
@@ -1064,29 +1380,23 @@ app.put('/api/documents/:documentId/status', async (req, res) => {
   }
 });
 
-// Duplicate document for editing
-app.post('/api/documents/:documentId/duplicate', async (req, res) => {
+// Duplicate document for editing - Now requires authentication
+app.post('/api/documents/:documentId/duplicate', authenticateToken, verifyDocumentOwnership, async (req, res) => {
   try {
     const { documentId } = req.params;
-    
-    const docRef = db.collection('documents').doc(documentId);
-    const doc = await docRef.get();
-
-    if (!doc.exists) {
-      return res.status(404).json({ error: 'Document not found' });
-    }
-
-    const originalDoc = doc.data();
+    const originalDoc = req.document; // From verifyDocumentOwnership middleware
     const newDocumentId = crypto.randomUUID();
 
     // Create duplicate with new ID and reset status
     const duplicateDoc = {
       ...originalDoc,
       id: newDocumentId,
+      userId: req.user.userId, // Ensure new document belongs to current user
       status: 'draft',
       createdAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
       updatedAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
       originalName: `Copy of ${originalDoc.originalName}`,
+      title: `Copy of ${originalDoc.title}`,
       // Reset signing-related fields
       sentAt: null,
       completedAt: null,
@@ -1097,7 +1407,12 @@ app.post('/api/documents/:documentId/duplicate', async (req, res) => {
         signedAt: null,
         signatureData: null,
         fieldValues: null
-      })) || []
+      })) || [],
+      createdBy: {
+        userId: req.user.userId,
+        email: req.user.email,
+        name: req.user.name
+      }
     };
 
     await db.collection('documents').doc(newDocumentId).set(duplicateDoc);
@@ -1113,12 +1428,13 @@ app.post('/api/documents/:documentId/duplicate', async (req, res) => {
   }
 });
 
-// Get document statistics for dashboard
-app.get('/api/documents/stats', async (req, res) => {
+// Get document statistics for dashboard - Now requires authentication and filters by user
+app.get('/api/documents/stats', authenticateToken, async (req, res) => {
   try {
-    const documentsRef = db.collection('documents');
+    const userId = req.user.userId;
+    const documentsRef = db.collection('documents').where('userId', '==', userId);
     
-    // Get all documents
+    // Get all user's documents
     const allDocsSnapshot = await documentsRef.get();
     const total = allDocsSnapshot.size;
 
@@ -1146,23 +1462,25 @@ app.get('/api/documents/stats', async (req, res) => {
   }
 });
 
-// Delete document
-app.delete('/api/documents/:documentId', async (req, res) => {
+// Delete document - Now requires authentication
+app.delete('/api/documents/:documentId', authenticateToken, verifyDocumentOwnership, async (req, res) => {
   try {
     const { documentId } = req.params;
+    const documentData = req.document; // From verifyDocumentOwnership middleware
 
-    // Get document data first
-    const docRef = db.collection('documents').doc(documentId);
-    const doc = await docRef.get();
-
-    if (!doc.exists) {
-      return res.status(404).json({ error: 'Document not found' });
-    }
-
-    const documentData = doc.data();
-
-    // Delete file from storage
-    if (documentData.fileName) {
+    // Delete files from storage
+    if (documentData.files && Array.isArray(documentData.files)) {
+      // Multi-file document
+      for (const file of documentData.files) {
+        try {
+          await bucket.file(file.fileName).delete();
+        } catch (storageError) {
+          console.error('Storage deletion error for file:', file.fileName, storageError);
+          // Continue with other files even if one fails
+        }
+      }
+    } else if (documentData.fileName) {
+      // Single file document
       try {
         await bucket.file(documentData.fileName).delete();
       } catch (storageError) {
@@ -1172,6 +1490,7 @@ app.delete('/api/documents/:documentId', async (req, res) => {
     }
 
     // Delete document from Firestore
+    const docRef = db.collection('documents').doc(documentId);
     await docRef.delete();
 
     res.json({ success: true, message: 'Document deleted successfully' });
@@ -1181,8 +1500,8 @@ app.delete('/api/documents/:documentId', async (req, res) => {
   }
 });
 
-// Create sharing workflow configuration
-app.post('/api/documents/:documentId/share', async (req, res) => {
+// Create sharing workflow configuration - Now requires authentication
+app.post('/api/documents/:documentId/share', authenticateToken, verifyDocumentOwnership, async (req, res) => {
   try {
     const { documentId } = req.params;
     const { signers, workflowType, message, senderName, senderEmail } = req.body;
@@ -1457,26 +1776,172 @@ const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email'    // Email address
 ];
 
-// Token Manager class for handling authentication tokens
-class TokenManager {
-  constructor(database) {
-    this.db = database;
-  }
-
-  async generateTokens(userData) {
-    const accessToken = `access_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const refreshToken = `refresh_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+// User logout - Now uses JWT authentication
+app.post('/auth/logout', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
     
-    return {
-      accessToken,
-      refreshToken,
-      tokenType: 'Bearer',
-      expiresIn: 3600, // 1 hour
-      issuedAt: new Date().toISOString(),
-      userData
-    };
+    // Invalidate user's tokens in database
+    const userRef = db.collection('users').doc(userId);
+    await userRef.update({
+      'auth.accessToken': null,
+      'auth.refreshToken': null,
+      lastLogout: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
+      lastUpdated: new Date()
+    });
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+    
+  } catch (error) {
+    console.error('Error logging out:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error logging out',
+      details: error.message
+    });
   }
-}
+});
+
+// Refresh token endpoint
+app.post('/auth/refresh', async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+    
+    if (!refreshToken) {
+      return res.status(400).json({
+        success: false,
+        error: 'Refresh token is required'
+      });
+    }
+
+    // Verify refresh token
+    let decoded;
+    try {
+      decoded = jwt.verify(refreshToken, JWT_SECRET);
+    } catch (error) {
+      if (error.name === 'TokenExpiredError') {
+        return res.status(401).json({
+          success: false,
+          error: 'Refresh token expired',
+          message: 'Your session has expired. Please login again.'
+        });
+      }
+      
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid refresh token',
+        message: 'The provided refresh token is invalid'
+      });
+    }
+
+    // Check if it's actually a refresh token
+    if (decoded.type !== 'refresh') {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid token type',
+        message: 'The provided token is not a refresh token'
+      });
+    }
+
+    // Get user from database
+    const userDoc = await db.collection('users').doc(decoded.userId).get();
+    
+    if (!userDoc.exists) {
+      return res.status(401).json({
+        success: false,
+        error: 'User not found',
+        message: 'User associated with this token no longer exists'
+      });
+    }
+
+    const userData = userDoc.data();
+    
+    // Check if refresh token matches stored token
+    if (userData.auth && userData.auth.refreshToken !== refreshToken) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid refresh token',
+        message: 'The refresh token does not match our records'
+      });
+    }
+
+    // Generate new tokens
+    const tokenManager = new TokenManager(db);
+    const newTokens = await tokenManager.generateTokens({
+      userId: decoded.userId,
+      email: userData.email,
+      name: userData.name,
+      loginProvider: userData.loginProvider,
+      lastLoginAt: new Date().toISOString()
+    });
+
+    // Update tokens in database
+    await userDoc.ref.update({
+      auth: newTokens,
+      lastTokenRefresh: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
+      lastUpdated: new Date()
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Tokens refreshed successfully',
+      data: {
+        accessToken: newTokens.accessToken,
+        refreshToken: newTokens.refreshToken,
+        tokenType: newTokens.tokenType,
+        expiresIn: newTokens.expiresIn,
+        userData: newTokens.userData
+      }
+    });
+
+  } catch (error) {
+    console.error('Refresh token error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error during token refresh',
+      details: error.message
+    });
+  }
+});
+
+// Get user profile - Now uses JWT authentication
+app.get('/auth/profile', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    
+    // Get fresh user data from database
+    const userDoc = await db.collection('users').doc(userId).get();
+    
+    if (!userDoc.exists) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'User not found' 
+      });
+    }
+
+    const userData = userDoc.data();
+    
+    // Remove sensitive data from response
+    const { password, auth, ...userResponse } = userData;
+
+    res.json({
+      success: true,
+      data: {
+        id: userDoc.id,
+        ...userResponse
+      }
+    });
+  } catch (error) {
+    console.error('Get profile error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
+    });
+  }
+});
 
 // Universal authentication endpoint
 app.post('/auth/:provider', async (req, res) => {
@@ -1496,117 +1961,147 @@ app.post('/auth/:provider', async (req, res) => {
           });
         }
 
-        const oauth2Client = new google.auth.OAuth2(
-          '606105812193-7ldf8ofiset6impsavns11ib7nd71mfn.apps.googleusercontent.com',
-          process.env.GOOGLE_CLIENT_SECRET || 'your-google-client-secret',
-          `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`
-        );
+        // Check if Google OAuth is properly configured
+        const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+        if (!googleClientSecret || googleClientSecret === 'your-actual-google-client-secret-here' || googleClientSecret === 'your-google-client-secret') {
+          return res.status(500).json({
+            success: false,
+            error: 'Google OAuth not configured',
+            details: 'GOOGLE_CLIENT_SECRET environment variable is not set or is using placeholder value. Please configure Google OAuth in Google Cloud Console.'
+          });
+        }
 
-        const { tokens } = await oauth2Client.getToken({
-          code: code,
-          redirect_uri: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`,
-          scope: GOOGLE_SCOPES.join(' ')
-        });
+        try {
+          const oauth2Client = new google.auth.OAuth2(
+            '606105812193-7ldf8ofiset6impsavns11ib7nd71mfn.apps.googleusercontent.com',
+            googleClientSecret,
+            `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`
+          );
 
-        oauth2Client.setCredentials(tokens);
-        const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
-        const userInfoResponse = await oauth2.userinfo.get();
-        const userInfo = userInfoResponse.data;
-
-        const userSnapshot = await usersRef
-          .where('email', '==', userInfo.email)
-          .get();
-
-        const currentTime = Date.now();
-        const expiresIn = typeof tokens.expires_in === 'number' && !isNaN(tokens.expires_in) ? 
-          tokens.expires_in : 3600;
-        const tokenExpiryDate = currentTime + (expiresIn * 1000);
-
-        const googleLogin = {
-          name: userInfo.name,
-          picture: userInfo.picture || '',
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
-          tokenType: tokens.token_type || 'Bearer',
-          tokenExpiryDate: tokenExpiryDate,
-          lastLoginAt: new Date().toISOString()
-        };
-
-        if (userSnapshot.empty) {
-          // Create new user
-          const newUserRef = usersRef.doc();
-          const userId = newUserRef.id;
-
-          const authTokens = await tokenManager.generateTokens({
-            userId,
-            email: userInfo.email,
-            name: userInfo.name,
-            loginProvider: 'google',
-            lastLoginAt: new Date().toISOString()
+          const { tokens } = await oauth2Client.getToken({
+            code: code,
+            redirect_uri: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`,
+            scope: GOOGLE_SCOPES.join(' ')
           });
 
-          const newUserData = {
-            email: userInfo.email,
+          oauth2Client.setCredentials(tokens);
+          const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+          const userInfoResponse = await oauth2.userinfo.get();
+          const userInfo = userInfoResponse.data;
+
+          const userSnapshot = await usersRef
+            .where('email', '==', userInfo.email)
+            .get();
+
+          const currentTime = Date.now();
+          const expiresIn = typeof tokens.expires_in === 'number' && !isNaN(tokens.expires_in) ? 
+            tokens.expires_in : 3600;
+          const tokenExpiryDate = currentTime + (expiresIn * 1000);
+
+          const googleLogin = {
             name: userInfo.name,
-            picture: userInfo.picture,
-            createdAt: new Date(),
-            lastUpdated: new Date(),
-            loginProvider: 'google',
-            googleLogin,
-            auth: authTokens,
-            userId
+            picture: userInfo.picture || '',
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            tokenType: tokens.token_type || 'Bearer',
+            tokenExpiryDate: tokenExpiryDate,
+            lastLoginAt: new Date().toISOString()
           };
 
-          await newUserRef.set(newUserData);
+          if (userSnapshot.empty) {
+            // Create new user
+            const newUserRef = usersRef.doc();
+            const userId = newUserRef.id;
 
-          return res.status(200).json({
-            success: true,
-            message: 'Google authentication successful',
-            data: {
-              id: userId,
+            const authTokens = await tokenManager.generateTokens({
               userId,
               email: userInfo.email,
               name: userInfo.name,
-              picture: userInfo.picture,
               loginProvider: 'google',
-              accessToken: authTokens.accessToken
-            }
-          });
-        } else {
-          // Update existing user
-          const userDoc = userSnapshot.docs[0];
-          const userId = userDoc.id;
+              lastLoginAt: new Date().toISOString()
+            });
 
-          const authTokens = await tokenManager.generateTokens({
-            userId,
-            email: userInfo.email,
-            name: userInfo.name,
-            loginProvider: 'google',
-            lastLoginAt: new Date().toISOString()
-          });
-
-          await userDoc.ref.update({
-            lastUpdated: new Date(),
-            loginProvider: 'google',
-            googleLogin,
-            auth: authTokens,
-            picture: userInfo.picture
-          });
-
-          const userData = userDoc.data();
-
-          return res.status(200).json({
-            success: true,
-            message: 'Google authentication successful',
-            data: {
-              id: userId,
-              userId,
+            const newUserData = {
               email: userInfo.email,
               name: userInfo.name,
               picture: userInfo.picture,
+              createdAt: new Date(),
+              lastUpdated: new Date(),
               loginProvider: 'google',
-              accessToken: authTokens.accessToken
-            }
+              googleLogin,
+              auth: authTokens,
+              userId
+            };
+
+            await newUserRef.set(newUserData);
+
+            return res.status(200).json({
+              success: true,
+              message: 'Google authentication successful',
+              data: {
+                id: userId,
+                userId,
+                email: userInfo.email,
+                name: userInfo.name,
+                picture: userInfo.picture,
+                loginProvider: 'google',
+                accessToken: authTokens.accessToken,
+                refreshToken: authTokens.refreshToken
+              }
+            });
+          } else {
+            // Update existing user
+            const userDoc = userSnapshot.docs[0];
+            const userId = userDoc.id;
+
+            const authTokens = await tokenManager.generateTokens({
+              userId,
+              email: userInfo.email,
+              name: userInfo.name,
+              loginProvider: 'google',
+              lastLoginAt: new Date().toISOString()
+            });
+
+            await userDoc.ref.update({
+              lastUpdated: new Date(),
+              loginProvider: 'google',
+              googleLogin,
+              auth: authTokens,
+              picture: userInfo.picture
+            });
+
+            const userData = userDoc.data();
+
+            return res.status(200).json({
+              success: true,
+              message: 'Google authentication successful',
+              data: {
+                id: userId,
+                userId,
+                email: userInfo.email,
+                name: userInfo.name,
+                picture: userInfo.picture,
+                loginProvider: 'google',
+                accessToken: authTokens.accessToken,
+                refreshToken: authTokens.refreshToken
+              }
+            });
+          }
+        } catch (googleError) {
+          console.error('Google OAuth error:', googleError);
+          
+          if (googleError.message && googleError.message.includes('invalid_client')) {
+            return res.status(400).json({
+              success: false,
+              error: 'Invalid Google OAuth configuration',
+              details: 'The Google Client ID or Client Secret is invalid. Please check your Google Cloud Console configuration.'
+            });
+          }
+          
+          return res.status(500).json({
+            success: false,
+            error: 'Google authentication failed',
+            details: googleError.message
           });
         }
       }
@@ -1658,10 +2153,13 @@ app.post('/auth/:provider', async (req, res) => {
           lastLoginAt: new Date().toISOString()
         });
 
+        // Hash password before storing
+        const hashedPassword = await tokenManager.hashPassword(password);
+
         const newUserData = {
           email,
           name,
-          password, // In production, hash this password!
+          password: hashedPassword, // Store hashed password
           userId,
           loginProvider: 'email',
           createdAt: new Date(),
@@ -1680,13 +2178,19 @@ app.post('/auth/:provider', async (req, res) => {
             email,
             name,
             loginProvider: 'email',
-            accessToken: tokens.accessToken
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken
           }
         });
       }
 
       case 'email-login': {
         const { email, password } = req.body;
+        
+        console.log('=== EMAIL LOGIN DEBUG ===');
+        console.log('Email:', email);
+        console.log('Password provided:', !!password);
+        console.log('Local mode:', isLocalMode);
         
         if (!email || !password) {
           return res.status(400).json({
@@ -1695,9 +2199,22 @@ app.post('/auth/:provider', async (req, res) => {
           });
         }
 
+        console.log('Querying users with email:', email);
         const userSnapshot = await usersRef
           .where('email', '==', email)
           .get();
+
+        console.log('User snapshot empty:', userSnapshot.empty);
+        console.log('User snapshot size:', userSnapshot.size);
+        
+        if (isLocalMode && mockDatabase) {
+          console.log('Mock database contents:');
+          for (const [key, value] of mockDatabase.entries()) {
+            if (key.startsWith('users/')) {
+              console.log(`  ${key}:`, { email: value.email, name: value.name });
+            }
+          }
+        }
 
         if (userSnapshot.empty) {
           return res.status(404).json({
@@ -1706,12 +2223,19 @@ app.post('/auth/:provider', async (req, res) => {
           });
         }
 
+        console.log('Found user, docs length:', userSnapshot.docs?.length);
         const userDoc = userSnapshot.docs[0];
         const userId = userDoc.id;
         const userData = userDoc.data();
         
-        // Verify password (in production, use proper password hashing)
-        if (userData.password !== password) {
+        console.log('User data:', { email: userData.email, name: userData.name, hasPassword: !!userData.password });
+        
+        // Verify password using bcrypt
+        const isPasswordValid = await tokenManager.verifyPassword(password, userData.password);
+        
+        console.log('Password valid:', isPasswordValid);
+        
+        if (!isPasswordValid) {
           return res.status(401).json({
             success: false,
             error: 'Invalid email or password'
@@ -1742,7 +2266,8 @@ app.post('/auth/:provider', async (req, res) => {
             name: userData.name,
             picture: userData.picture,
             loginProvider: 'email',
-            accessToken: tokens.accessToken
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken
           }
         });
       }
@@ -1796,7 +2321,8 @@ app.post('/auth/:provider', async (req, res) => {
               phone,
               name: `User ${phone.slice(-4)}`,
               loginProvider: 'phone',
-              accessToken: tokens.accessToken
+              accessToken: tokens.accessToken,
+              refreshToken: tokens.refreshToken
             }
           });
         } else {
@@ -1827,7 +2353,8 @@ app.post('/auth/:provider', async (req, res) => {
               phone,
               name: userData.name,
               loginProvider: 'phone',
-              accessToken: tokens.accessToken
+              accessToken: tokens.accessToken,
+              refreshToken: tokens.refreshToken
             }
           });
         }
@@ -1849,109 +2376,6 @@ app.post('/auth/:provider', async (req, res) => {
     });
   }
 });
-
-// User logout
-app.post('/auth/logout', async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(400).json({
-        success: false,
-        error: 'Authorization token required'
-      });
-    }
-
-    const token = authHeader.substring(7);
-    
-    try {
-      // Find user by access token and invalidate
-      const usersRef = db.collection('users');
-      const userQuery = await usersRef.where('auth.accessToken', '==', token).get();
-      
-      if (!userQuery.empty) {
-        const userDoc = userQuery.docs[0];
-        await userDoc.ref.update({
-          'auth.accessToken': null,
-          'auth.refreshToken': null,
-          lastLogout: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
-          lastUpdated: new Date()
-        });
-      }
-    } catch (error) {
-      console.log('Logout cleanup error:', error);
-    }
-    
-    return res.status(200).json({
-      success: true,
-      message: 'Logged out successfully'
-    });
-    
-  } catch (error) {
-    console.error('Error logging out:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Error logging out',
-      details: error.message
-    });
-  }
-});
-
-// Get user profile
-app.get('/auth/profile', async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'Authorization token required' 
-      });
-    }
-
-    const token = authHeader.substring(7);
-    
-    try {
-      // Find user by access token
-      const usersRef = db.collection('users');
-      const userQuery = await usersRef.where('auth.accessToken', '==', token).get();
-      
-      if (userQuery.empty) {
-        return res.status(404).json({ 
-          success: false, 
-          error: 'User not found or token invalid' 
-        });
-      }
-
-      const userDoc = userQuery.docs[0];
-      const userData = userDoc.data();
-      
-      // Remove sensitive data from response
-      const { password, auth, ...userResponse } = userData;
-
-      res.json({
-        success: true,
-        data: {
-          id: userDoc.id,
-          ...userResponse
-        }
-      });
-    } catch (error) {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'Invalid token' 
-      });
-    }
-  } catch (error) {
-    console.error('Get profile error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Internal server error' 
-    });
-  }
-});
-
-// ==================== END AUTHENTICATION ENDPOINTS ====================
 
 app.listen(PORT, () => {
   console.log(`🚀 SignApp Backend running on port ${PORT}`);
