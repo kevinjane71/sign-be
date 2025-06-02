@@ -174,4 +174,4 @@ Dockerfile.dev
 # Backup files
 *.backup
 *.bak
-*.tmp 
+*.tmp .env.example
