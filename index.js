@@ -1449,294 +1449,456 @@ app.delete('/api/documents/:documentId/signers/:signerId', async (req, res) => {
 
 // ==================== AUTHENTICATION ENDPOINTS ====================
 
-// Email Login
-app.post('/meetflow/auth/email-login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
+// Google OAuth scopes for SignFlow
+const GOOGLE_SCOPES = [
+  'https://www.googleapis.com/auth/calendar.events',  // Calendar events access
+  'https://www.googleapis.com/auth/gmail.send',       // Gmail send access
+  'https://www.googleapis.com/auth/userinfo.profile', // Basic profile info
+  'https://www.googleapis.com/auth/userinfo.email'    // Email address
+];
 
-    if (!email || !password) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Email and password are required' 
-      });
-    }
-
-    // Check if user exists in database
-    const usersRef = db.collection('users');
-    const userQuery = await usersRef.where('email', '==', email).get();
-
-    if (userQuery.empty) {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'Invalid email or password' 
-      });
-    }
-
-    let userData = null;
-    userQuery.forEach(doc => {
-      userData = { id: doc.id, ...doc.data() };
-    });
-
-    // In a real app, you would verify password against hashed password
-    // For now, we'll use a simple check (you should implement proper password hashing)
-    if (userData.password !== password) {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'Invalid email or password' 
-      });
-    }
-
-    // Update last login time
-    await db.collection('users').doc(userData.id).update({
-      lastLogin: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
-    });
-
-    // Return user data without password
-    const { password: _, ...userResponse } = userData;
-    userResponse.loginTime = new Date().toISOString();
-
-    res.json({
-      success: true,
-      message: 'Login successful',
-      data: userResponse
-    });
-  } catch (error) {
-    console.error('Email login error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Internal server error' 
-    });
+// Token Manager class for handling authentication tokens
+class TokenManager {
+  constructor(database) {
+    this.db = database;
   }
-});
 
-// Email Signup
-app.post('/meetflow/auth/email-signup', async (req, res) => {
-  try {
-    const { email, password, name, confirmPassword } = req.body;
-
-    if (!email || !password || !name || !confirmPassword) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'All fields are required' 
-      });
-    }
-
-    if (password !== confirmPassword) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Passwords do not match' 
-      });
-    }
-
-    if (password.length < 6) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Password must be at least 6 characters long' 
-      });
-    }
-
-    // Check if user already exists
-    const usersRef = db.collection('users');
-    const existingUserQuery = await usersRef.where('email', '==', email).get();
-
-    if (!existingUserQuery.empty) {
-      return res.status(409).json({ 
-        success: false, 
-        error: 'User with this email already exists' 
-      });
-    }
-
-    // Create new user
-    const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const userData = {
-      id: userId,
-      email: email,
-      name: name,
-      password: password, // In production, hash this password!
-      authMethod: 'email',
-      createdAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
-      lastLogin: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
-    };
-
-    // Store user in database
-    await db.collection('users').doc(userId).set(userData);
-
-    // Return user data without password
-    const { password: _, ...userResponse } = userData;
-    userResponse.signupTime = new Date().toISOString();
-
-    res.json({
-      success: true,
-      message: 'Account created successfully',
-      data: userResponse
-    });
-  } catch (error) {
-    console.error('Email signup error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Internal server error' 
-    });
-  }
-});
-
-// Google OAuth
-app.post('/meetflow/auth/google', async (req, res) => {
-  try {
-    const { code } = req.body;
-
-    if (!code) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Authorization code is required' 
-      });
-    }
-
-    // Exchange code for access token
-    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        client_id: '1087929121342-sq0cd1gq0oo85ond6c11in1u83spc0mv.apps.googleusercontent.com',
-        client_secret: process.env.GOOGLE_CLIENT_SECRET || 'your-google-client-secret',
-        code: code,
-        grant_type: 'authorization_code',
-        redirect_uri: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`,
-      }),
-    });
-
-    const tokenData = await tokenResponse.json();
-
-    if (!tokenData.access_token) {
-      throw new Error('Failed to get access token from Google');
-    }
-
-    // Get user info from Google
-    const userResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-      headers: {
-        Authorization: `Bearer ${tokenData.access_token}`,
-      },
-    });
-
-    const googleUser = await userResponse.json();
-
-    if (!googleUser.email) {
-      throw new Error('Failed to get user info from Google');
-    }
-
-    // Check if user exists in our database
-    const usersRef = db.collection('users');
-    const userQuery = await usersRef.where('email', '==', googleUser.email).get();
-
-    let userData;
-
-    if (userQuery.empty) {
-      // Create new user
-      const userId = `google_user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      userData = {
-        id: userId,
-        email: googleUser.email,
-        name: googleUser.name || googleUser.email.split('@')[0],
-        picture: googleUser.picture,
-        authMethod: 'google',
-        googleId: googleUser.id,
-        createdAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
-        lastLogin: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
-      };
-
-      await db.collection('users').doc(userId).set(userData);
-    } else {
-      // Update existing user
-      userQuery.forEach(doc => {
-        userData = { id: doc.id, ...doc.data() };
-      });
-
-      await db.collection('users').doc(userData.id).update({
-        lastLogin: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
-        picture: googleUser.picture // Update profile picture if changed
-      });
-    }
-
-    userData.loginTime = new Date().toISOString();
-
-    res.json({
-      success: true,
-      message: 'Google authentication successful',
-      data: userData
-    });
-  } catch (error) {
-    console.error('Google auth error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Google authentication failed' 
-    });
-  }
-});
-
-// Phone Authentication
-app.post('/meetflow/auth/phone', async (req, res) => {
-  try {
-    const { phone, idToken } = req.body;
-
-    if (!phone || !idToken) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Phone number and ID token are required' 
-      });
-    }
-
-    // In a real app, you would verify the Firebase ID token here
-    // For now, we'll trust the frontend verification
+  async generateTokens(userData) {
+    const accessToken = `access_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const refreshToken = `refresh_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
-    // Check if user exists in our database
+    return {
+      accessToken,
+      refreshToken,
+      tokenType: 'Bearer',
+      expiresIn: 3600, // 1 hour
+      issuedAt: new Date().toISOString(),
+      userData
+    };
+  }
+}
+
+// Universal authentication endpoint
+app.post('/auth/:provider', async (req, res) => {
+  try {
+    const { provider } = req.params;
     const usersRef = db.collection('users');
-    const userQuery = await usersRef.where('phone', '==', phone).get();
+    const tokenManager = new TokenManager(db);
 
-    let userData;
+    switch (provider) {
+      case 'google': {
+        const { code } = req.body;
+        
+        if (!code) {
+          return res.status(400).json({
+            success: false,
+            error: 'Authorization code is required'
+          });
+        }
 
-    if (userQuery.empty) {
-      // Create new user
-      const userId = `phone_user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      userData = {
-        id: userId,
-        phone: phone,
-        name: `User ${phone.slice(-4)}`,
-        authMethod: 'phone',
-        createdAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
-        lastLogin: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
-      };
+        const oauth2Client = new google.auth.OAuth2(
+          '606105812193-7ldf8ofiset6impsavns11ib7nd71mfn.apps.googleusercontent.com',
+          process.env.GOOGLE_CLIENT_SECRET || 'your-google-client-secret',
+          `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`
+        );
 
-      await db.collection('users').doc(userId).set(userData);
-    } else {
-      // Update existing user
-      userQuery.forEach(doc => {
-        userData = { id: doc.id, ...doc.data() };
-      });
+        const { tokens } = await oauth2Client.getToken({
+          code: code,
+          redirect_uri: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`,
+          scope: GOOGLE_SCOPES.join(' ')
+        });
 
-      await db.collection('users').doc(userData.id).update({
-        lastLogin: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
+        oauth2Client.setCredentials(tokens);
+        const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+        const userInfoResponse = await oauth2.userinfo.get();
+        const userInfo = userInfoResponse.data;
+
+        const userSnapshot = await usersRef
+          .where('email', '==', userInfo.email)
+          .get();
+
+        const currentTime = Date.now();
+        const expiresIn = typeof tokens.expires_in === 'number' && !isNaN(tokens.expires_in) ? 
+          tokens.expires_in : 3600;
+        const tokenExpiryDate = currentTime + (expiresIn * 1000);
+
+        const googleLogin = {
+          name: userInfo.name,
+          picture: userInfo.picture || '',
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          tokenType: tokens.token_type || 'Bearer',
+          tokenExpiryDate: tokenExpiryDate,
+          lastLoginAt: new Date().toISOString()
+        };
+
+        if (userSnapshot.empty) {
+          // Create new user
+          const newUserRef = usersRef.doc();
+          const userId = newUserRef.id;
+
+          const authTokens = await tokenManager.generateTokens({
+            userId,
+            email: userInfo.email,
+            name: userInfo.name,
+            loginProvider: 'google',
+            lastLoginAt: new Date().toISOString()
+          });
+
+          const newUserData = {
+            email: userInfo.email,
+            name: userInfo.name,
+            picture: userInfo.picture,
+            createdAt: new Date(),
+            lastUpdated: new Date(),
+            loginProvider: 'google',
+            googleLogin,
+            auth: authTokens,
+            userId
+          };
+
+          await newUserRef.set(newUserData);
+
+          return res.status(200).json({
+            success: true,
+            message: 'Google authentication successful',
+            data: {
+              id: userId,
+              userId,
+              email: userInfo.email,
+              name: userInfo.name,
+              picture: userInfo.picture,
+              loginProvider: 'google',
+              accessToken: authTokens.accessToken
+            }
+          });
+        } else {
+          // Update existing user
+          const userDoc = userSnapshot.docs[0];
+          const userId = userDoc.id;
+
+          const authTokens = await tokenManager.generateTokens({
+            userId,
+            email: userInfo.email,
+            name: userInfo.name,
+            loginProvider: 'google',
+            lastLoginAt: new Date().toISOString()
+          });
+
+          await userDoc.ref.update({
+            lastUpdated: new Date(),
+            loginProvider: 'google',
+            googleLogin,
+            auth: authTokens,
+            picture: userInfo.picture
+          });
+
+          const userData = userDoc.data();
+
+          return res.status(200).json({
+            success: true,
+            message: 'Google authentication successful',
+            data: {
+              id: userId,
+              userId,
+              email: userInfo.email,
+              name: userInfo.name,
+              picture: userInfo.picture,
+              loginProvider: 'google',
+              accessToken: authTokens.accessToken
+            }
+          });
+        }
+      }
+
+      case 'email-signup': {
+        const { email, password, name, confirmPassword } = req.body;
+        
+        if (!email || !password || !name || !confirmPassword) {
+          return res.status(400).json({
+            success: false,
+            error: 'All fields are required'
+          });
+        }
+
+        if (password !== confirmPassword) {
+          return res.status(400).json({
+            success: false,
+            error: 'Passwords do not match'
+          });
+        }
+
+        if (password.length < 6) {
+          return res.status(400).json({
+            success: false,
+            error: 'Password must be at least 6 characters long'
+          });
+        }
+
+        const userSnapshot = await usersRef
+          .where('email', '==', email)
+          .get();
+
+        if (userSnapshot.size > 0) {
+          return res.status(400).json({
+            success: false,
+            error: 'Email already registered'
+          });
+        }
+
+        // Create new user
+        const newUserRef = usersRef.doc();
+        const userId = newUserRef.id;
+
+        const tokens = await tokenManager.generateTokens({
+          userId,
+          email,
+          name,
+          loginProvider: 'email',
+          lastLoginAt: new Date().toISOString()
+        });
+
+        const newUserData = {
+          email,
+          name,
+          password, // In production, hash this password!
+          userId,
+          loginProvider: 'email',
+          createdAt: new Date(),
+          lastUpdated: new Date(),
+          auth: tokens
+        };
+
+        await newUserRef.set(newUserData);
+
+        return res.status(200).json({
+          success: true,
+          message: 'Account created successfully',
+          data: {
+            id: userId,
+            userId,
+            email,
+            name,
+            loginProvider: 'email',
+            accessToken: tokens.accessToken
+          }
+        });
+      }
+
+      case 'email-login': {
+        const { email, password } = req.body;
+        
+        if (!email || !password) {
+          return res.status(400).json({
+            success: false,
+            error: 'Email and password are required'
+          });
+        }
+
+        const userSnapshot = await usersRef
+          .where('email', '==', email)
+          .get();
+
+        if (userSnapshot.empty) {
+          return res.status(404).json({
+            success: false,
+            error: 'Invalid email or password'
+          });
+        }
+
+        const userDoc = userSnapshot.docs[0];
+        const userId = userDoc.id;
+        const userData = userDoc.data();
+        
+        // Verify password (in production, use proper password hashing)
+        if (userData.password !== password) {
+          return res.status(401).json({
+            success: false,
+            error: 'Invalid email or password'
+          });
+        }
+        
+        const tokens = await tokenManager.generateTokens({
+          userId,
+          email,
+          name: userData.name,
+          loginProvider: 'email',
+          lastLoginAt: new Date().toISOString()
+        });
+
+        await userDoc.ref.update({
+          lastUpdated: new Date(),
+          auth: tokens,
+          lastLogin: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
+        });
+
+        return res.status(200).json({
+          success: true,
+          message: 'Login successful',
+          data: {
+            id: userId,
+            userId,
+            email,
+            name: userData.name,
+            picture: userData.picture,
+            loginProvider: 'email',
+            accessToken: tokens.accessToken
+          }
+        });
+      }
+
+      case 'phone': {
+        const { phone, idToken } = req.body;
+        
+        if (!phone || !idToken) {
+          return res.status(400).json({
+            success: false,
+            error: 'Phone and idToken are required'
+          });
+        }
+
+        // In production, verify the Firebase ID token here
+        
+        const userSnapshot = await usersRef
+          .where('phone', '==', phone)
+          .get();
+
+        if (userSnapshot.empty) {
+          // Create new user
+          const newUserRef = usersRef.doc();
+          const userId = newUserRef.id;
+
+          const tokens = await tokenManager.generateTokens({
+            userId,
+            phone,
+            loginProvider: 'phone',
+            lastLoginAt: new Date().toISOString()
+          });
+
+          const newUserData = {
+            phone,
+            name: `User ${phone.slice(-4)}`,
+            userId,
+            loginProvider: 'phone',
+            createdAt: new Date(),
+            lastUpdated: new Date(),
+            auth: tokens
+          };
+
+          await newUserRef.set(newUserData);
+
+          return res.status(200).json({
+            success: true,
+            message: 'Phone authentication successful',
+            data: {
+              id: userId,
+              userId,
+              phone,
+              name: `User ${phone.slice(-4)}`,
+              loginProvider: 'phone',
+              accessToken: tokens.accessToken
+            }
+          });
+        } else {
+          // Update existing user
+          const userDoc = userSnapshot.docs[0];
+          const userId = userDoc.id;
+          const userData = userDoc.data();
+
+          const tokens = await tokenManager.generateTokens({
+            userId,
+            phone,
+            loginProvider: 'phone',
+            lastLoginAt: new Date().toISOString()
+          });
+
+          await userDoc.ref.update({
+            lastUpdated: new Date(),
+            auth: tokens,
+            lastLogin: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
+          });
+
+          return res.status(200).json({
+            success: true,
+            message: 'Phone authentication successful',
+            data: {
+              id: userId,
+              userId,
+              phone,
+              name: userData.name,
+              loginProvider: 'phone',
+              accessToken: tokens.accessToken
+            }
+          });
+        }
+      }
+
+      default:
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid authentication provider'
+        });
+    }
+
+  } catch (error) {
+    console.error('Auth error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error during authentication',
+      details: error.message
+    });
+  }
+});
+
+// User logout
+app.post('/auth/logout', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Authorization token required'
       });
     }
 
-    userData.loginTime = new Date().toISOString();
-
-    res.json({
+    const token = authHeader.substring(7);
+    
+    try {
+      // Find user by access token and invalidate
+      const usersRef = db.collection('users');
+      const userQuery = await usersRef.where('auth.accessToken', '==', token).get();
+      
+      if (!userQuery.empty) {
+        const userDoc = userQuery.docs[0];
+        await userDoc.ref.update({
+          'auth.accessToken': null,
+          'auth.refreshToken': null,
+          lastLogout: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
+          lastUpdated: new Date()
+        });
+      }
+    } catch (error) {
+      console.log('Logout cleanup error:', error);
+    }
+    
+    return res.status(200).json({
       success: true,
-      message: 'Phone authentication successful',
-      data: userData
+      message: 'Logged out successfully'
     });
+    
   } catch (error) {
-    console.error('Phone auth error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Internal server error' 
+    console.error('Error logging out:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error logging out',
+      details: error.message
     });
   }
 });
 
 // Get user profile
-app.get('/meetflow/auth/profile', async (req, res) => {
+app.get('/auth/profile', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     
@@ -1747,28 +1909,32 @@ app.get('/meetflow/auth/profile', async (req, res) => {
       });
     }
 
-    const token = authHeader.substring(7); // Remove 'Bearer ' prefix
-    
-    // In a real app, you would verify the JWT token here
-    // For now, we'll use the token as user ID for simplicity
+    const token = authHeader.substring(7);
     
     try {
-      const userDoc = await db.collection('users').doc(token).get();
+      // Find user by access token
+      const usersRef = db.collection('users');
+      const userQuery = await usersRef.where('auth.accessToken', '==', token).get();
       
-      if (!userDoc.exists) {
+      if (userQuery.empty) {
         return res.status(404).json({ 
           success: false, 
-          error: 'User not found' 
+          error: 'User not found or token invalid' 
         });
       }
 
+      const userDoc = userQuery.docs[0];
       const userData = userDoc.data();
-      // Remove password from response
-      const { password, ...userResponse } = userData;
+      
+      // Remove sensitive data from response
+      const { password, auth, ...userResponse } = userData;
 
       res.json({
         success: true,
-        data: userResponse
+        data: {
+          id: userDoc.id,
+          ...userResponse
+        }
       });
     } catch (error) {
       return res.status(401).json({ 
@@ -1785,41 +1951,7 @@ app.get('/meetflow/auth/profile', async (req, res) => {
   }
 });
 
-// Logout (mainly for cleanup)
-app.post('/meetflow/auth/logout', async (req, res) => {
-  try {
-    // In a real app, you might invalidate tokens or update last logout time
-    const authHeader = req.headers.authorization;
-    
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
-      
-      try {
-        // Update last logout time if user exists
-        const userDoc = await db.collection('users').doc(token).get();
-        if (userDoc.exists) {
-          await db.collection('users').doc(token).update({
-            lastLogout: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
-          });
-        }
-      } catch (error) {
-        // Ignore errors during logout cleanup
-        console.log('Logout cleanup error:', error);
-      }
-    }
-
-    res.json({
-      success: true,
-      message: 'Logout successful'
-    });
-  } catch (error) {
-    console.error('Logout error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Internal server error' 
-    });
-  }
-});
+// ==================== END AUTHENTICATION ENDPOINTS ====================
 
 app.listen(PORT, () => {
   console.log(`🚀 SignApp Backend running on port ${PORT}`);
