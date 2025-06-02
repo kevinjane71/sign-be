@@ -37,16 +37,18 @@ let bucket;
 let db;
 let isLocalMode = false;
 
-// Local file storage for development
+// Local file storage path - declare at top level but only create directory in local mode
 const localStoragePath = path.join(__dirname, 'uploads');
-if (!fs.existsSync(localStoragePath)) {
-  fs.mkdirSync(localStoragePath, { recursive: true });
-}
 
-// Check if we're in local development mode
+// Check if we're in local development mode first
 if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_PRIVATE_KEY || !process.env.FIREBASE_CLIENT_EMAIL) {
   console.log('🔧 Running in LOCAL DEVELOPMENT MODE - Firebase disabled');
   isLocalMode = true;
+  
+  // Only create uploads directory in local development mode
+  if (!fs.existsSync(localStoragePath)) {
+    fs.mkdirSync(localStoragePath, { recursive: true });
+  }
   
   // Mock database for local development
   const mockDatabase = new Map();
