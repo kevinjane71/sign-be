@@ -485,14 +485,15 @@ The MeetSynk Team`,
     };
   }
 
-  async sendEmail({ to, subject, text, html }) {
+  async sendEmail({ to, subject, text, html, attachments = [] }) {
     try {
       const mailOptions = {
         from: process.env.GODADY_EMAIL || "admin@meetsynk.com",
         to,
         subject,
         text,
-        html
+        html,
+        attachments
       };
       
       const info = await this.transporter.sendMail(mailOptions);
@@ -571,6 +572,66 @@ The MeetSynk Team`,
       text: template.text(emailData),
       html: template.html(emailData)
     });
+  }
+
+  async sendDocumentCompletedEmailWithPDF(documentData, pdfFilePath) {
+    console.log('=== EMAIL SERVICE PDF ATTACHMENT DEBUG ===');
+    console.log('📧 sendDocumentCompletedEmailWithPDF called with:', {
+      recipientEmail: documentData.recipientEmail,
+      documentTitle: documentData.documentTitle,
+      pdfPath: pdfFilePath
+    });
+    
+    if (!documentData.recipientEmail || !documentData.recipientName || !documentData.documentTitle) {
+      console.log('❌ Validation failed - missing required data:');
+      console.log('  recipientEmail:', !!documentData.recipientEmail);
+      console.log('  recipientName:', !!documentData.recipientName);
+      console.log('  documentTitle:', !!documentData.documentTitle);
+      throw new Error('Required document completion data is missing');
+    }
+
+    console.log('✅ Validation passed');
+
+    const template = this.templates.documentCompleted;
+    const emailData = {
+      recipientName: documentData.recipientName,
+      documentTitle: documentData.documentTitle,
+      completedDate: this.formatDate(new Date()),
+      signers: documentData.signers || [],
+      downloadUrl: documentData.downloadUrl || '#'
+    };
+
+    const attachments = [];
+    if (pdfFilePath) {
+      attachments.push({
+        filename: `${documentData.documentTitle}-signed.pdf`,
+        path: pdfFilePath,
+        contentType: 'application/pdf'
+      });
+      console.log('📎 PDF attachment added:', pdfFilePath);
+    }
+
+    console.log('📋 Processed email data:', JSON.stringify(emailData, null, 2));
+    console.log('📧 Email subject:', template.getSubject(documentData.documentTitle));
+    console.log('📧 Email to:', documentData.recipientEmail);
+    console.log('📎 Attachments:', attachments.length);
+    console.log('=== END EMAIL SERVICE PDF DEBUG ===');
+
+    try {
+      const result = await this.sendEmail({
+        to: documentData.recipientEmail,
+        subject: template.getSubject(documentData.documentTitle),
+        text: template.text(emailData),
+        html: template.html(emailData),
+        attachments: attachments
+      });
+      
+      console.log('✅ Email with PDF attachment sent successfully:', result);
+      return result;
+    } catch (error) {
+      console.error('❌ Email with PDF attachment failed:', error);
+      throw error;
+    }
   }
 
   // Existing MeetSynk methods

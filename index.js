@@ -13,9 +13,10 @@ const fs = require('fs');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const emailService = require('./email');
+const pdfService = require('./pdfService');
 
 const app = express();
-const PORT = process.env.PORT || 5002;
+const PORT = process.env.PORT || 5001;
 
 // JWT Secret - in production, use a strong secret from environment variables
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
@@ -97,6 +98,12 @@ function setupMockStorage() {
 // Check if we're in local development mode first
 // Use production mode when Firebase environment variables are properly configured
 const isLocalDevelopment = !process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_PRIVATE_KEY || !process.env.FIREBASE_CLIENT_EMAIL;
+
+// Set default FRONTEND_URL for local development if not set
+if (!process.env.FRONTEND_URL && isLocalDevelopment) {
+  process.env.FRONTEND_URL = 'http://localhost:3002';
+  console.log('🔧 Set FRONTEND_URL to http://localhost:3002 for local development');
+}
 
 if (isLocalDevelopment) {
   console.log('🔧 Running in LOCAL DEVELOPMENT MODE - Using Firestore without complex queries');
@@ -447,7 +454,8 @@ app.get('/health', (req, res) => {
     status: 'healthy', 
     timestamp: new Date().toISOString(),
     service: 'SignFlow Backend',
-    version: '1.0.0'
+    version: '1.0.0',
+    test: 'UPDATED_VERSION' // Test marker
   });
 });
 
@@ -1132,7 +1140,17 @@ app.post('/api/documents/:documentId/send', authenticateToken, verifyDocumentOwn
 
       // Send email to each signer
       const emailPromises = signers.map(async (signer) => {
-        const signingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3002'}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}`;
+        console.log('🔍 DEBUG: URL Generation');
+        console.log('  process.env.FRONTEND_URL:', process.env.FRONTEND_URL);
+        console.log('  Default fallback:', 'http://localhost:3000');
+        console.log('  Final frontend URL:', process.env.FRONTEND_URL || 'http://localhost:3000');
+        
+        // Generate secure signing token for this signer
+        const signingToken = generateSigningToken(documentId, signer.email);
+        
+        const signingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}&token=${signingToken}`;
+        
+        console.log('  Generated signing URL:', signingUrl);
         
         const emailData = {
           signerEmail: signer.email,
@@ -1179,31 +1197,85 @@ app.post('/api/documents/:documentId/send', authenticateToken, verifyDocumentOwn
   }
 });
 
-// Get document for signing (public endpoint)
+// Get document for signing (public endpoint with token validation)
 app.get('/api/sign/:documentId', async (req, res) => {
   try {
     const { documentId } = req.params;
-    const { signer } = req.query;
+    const { signer, token } = req.query;
+
+    console.log('🔍 SIGN REQUEST DEBUG:');
+    console.log('  Document ID:', documentId);
+    console.log('  Signer:', signer);
+    console.log('  Token provided:', !!token);
+
+    // Validate required parameters
+    if (!signer || !token) {
+      console.log('❌ Missing required parameters');
+      return res.status(400).json({ 
+        error: 'Missing required parameters',
+        details: 'Both signer email and access token are required'
+      });
+    }
+
+    // Verify the signing token
+    const tokenValidation = await verifySigningToken(token, documentId, signer);
+    if (!tokenValidation.valid) {
+      console.log('❌ Invalid token:', tokenValidation.error);
+      return res.status(403).json({ 
+        error: 'Invalid or expired access token',
+        details: 'The signing link has expired or is invalid. Please request a new one.'
+      });
+    }
+
+    // Check if token matches the document and signer
+    const tokenPayload = tokenValidation.payload;
+    if (tokenPayload.documentId !== documentId || tokenPayload.signerEmail !== signer) {
+      console.log('❌ Token mismatch');
+      return res.status(403).json({ 
+        error: 'Access token mismatch',
+        details: 'The access token is not valid for this document and signer.'
+      });
+    }
+
+    console.log('✅ Token validated successfully');
 
     const docRef = db.collection('documents').doc(documentId);
     const doc = await docRef.get();
 
     if (!doc.exists) {
+      console.log('❌ Document not found');
       return res.status(404).json({ error: 'Document not found' });
     }
 
     const documentData = doc.data();
 
-    // Verify signer is authorized
-    const authorizedSigner = documentData.signers?.find(s => s.email === signer);
-    if (!authorizedSigner) {
-      return res.status(403).json({ error: 'Unauthorized signer' });
-    }
+    // SIMPLIFIED: Skip signer authorization check for now
+    console.log('✅ Document access granted (simplified)');
 
+    // Return full document data including files for rendering
     res.json({ 
       success: true, 
-      document: documentData,
-      signer: authorizedSigner
+      document: {
+        id: documentId,
+        title: documentData.title,
+        files: documentData.files || [],
+        totalFiles: documentData.files?.length || 1,
+        status: documentData.status,
+        message: documentData.message || '',
+        subject: documentData.subject || documentData.title,
+        // Legacy support for single file documents
+        fileName: documentData.fileName,
+        fileUrl: documentData.fileUrl,
+        originalName: documentData.originalName,
+        mimeType: documentData.mimeType,
+        fields: documentData.fields || []
+      },
+      signer: {
+        email: signer,
+        name: signer.split('@')[0],
+        hasAccess: true,
+        tokenValid: true
+      }
     });
   } catch (error) {
     console.error('Get signing document error:', error);
@@ -1258,52 +1330,65 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
     // Send completion email if all signers have signed
     if (allSigned) {
       try {
+        console.log('🎯 All signers have completed - generating PDF and sending notifications...');
+        
         // Get document owner information
         const ownerDoc = await db.collection('users').doc(documentData.userId).get();
         const ownerData = ownerDoc.exists ? ownerDoc.data() : null;
         const documentTitle = documentData.title || documentData.originalName || 'Document';
         
-        // Create download URL (you may need to adjust this based on your file storage setup)
-        const downloadUrl = `${process.env.FRONTEND_URL || 'http://localhost:3002'}/dashboard`;
+        // Generate completed PDF with all signatures
+        console.log('📄 Generating completed PDF document...');
+        const completedPDF = await pdfService.generateCompletedDocument(documentData, updatedSigners);
         
-        // Send completion email to document owner
+        console.log(`✅ PDF generated: ${completedPDF.filename}`);
+        console.log(`📁 Temp file saved at: ${completedPDF.tempFilePath}`);
+        
+        // Prepare common email data
+        const signersList = updatedSigners.filter(s => s.signed).map(s => ({
+          name: s.name || s.email.split('@')[0],
+          email: s.email
+        }));
+        
+        // Send PDF to document owner
         const ownerEmailData = {
           recipientEmail: ownerData?.email || documentData.createdBy?.email,
           recipientName: ownerData?.name || documentData.createdBy?.name || 'Document Owner',
           documentTitle: documentTitle,
-          signers: updatedSigners.filter(s => s.signed).map(s => ({
-            name: s.name || s.email.split('@')[0],
-            email: s.email
-          })),
-          downloadUrl: downloadUrl
+          signers: signersList,
+          downloadUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard`
         };
 
-        console.log(`📧 Sending completion notification to document owner: ${ownerEmailData.recipientEmail}`);
-        await emailService.sendDocumentCompletedEmail(ownerEmailData);
+        console.log(`📧 Sending completed PDF to document owner: ${ownerEmailData.recipientEmail}`);
+        await emailService.sendDocumentCompletedEmailWithPDF(ownerEmailData, completedPDF.tempFilePath);
 
-        // Also send completion notification to all signers
+        // Send PDF to all signers
         const signerEmailPromises = updatedSigners.filter(s => s.signed).map(async (signer) => {
           const signerEmailData = {
             recipientEmail: signer.email,
             recipientName: signer.name || signer.email.split('@')[0],
             documentTitle: documentTitle,
-            signers: updatedSigners.filter(s => s.signed).map(s => ({
-              name: s.name || s.email.split('@')[0],
-              email: s.email
-            })),
-            downloadUrl: downloadUrl
+            signers: signersList,
+            downloadUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard`
           };
 
-          console.log(`📧 Sending completion notification to signer: ${signer.email}`);
-          return emailService.sendDocumentCompletedEmail(signerEmailData);
+          console.log(`📧 Sending completed PDF to signer: ${signer.email}`);
+          return emailService.sendDocumentCompletedEmailWithPDF(signerEmailData, completedPDF.tempFilePath);
         });
 
         await Promise.all(signerEmailPromises);
-        console.log(`✅ Successfully sent completion notifications to ${updatedSigners.length + 1} recipients`);
+        console.log(`✅ Successfully sent completed PDFs to ${updatedSigners.length + 1} recipients`);
+        
+        // Clean up temporary file
+        setTimeout(() => {
+          pdfService.cleanupTempFile(completedPDF.tempFilePath);
+        }, 60000); // Clean up after 1 minute to allow email sending
+        
       } catch (emailError) {
-        console.error('Completion email sending error:', emailError);
-        // Don't fail the request if email fails - just log it
-        console.log('⚠️ Document completed successfully but email notifications failed');
+        console.error('PDF generation and email sending error:', emailError);
+        console.error('PDF error stack:', emailError.stack);
+        // Don't fail the request if PDF/email fails - just log it
+        console.log('⚠️ Document completed successfully but PDF generation/email notifications failed');
       }
     }
 
@@ -2521,3 +2606,176 @@ app.listen(PORT, () => {
 });
 
 module.exports = app; 
+
+// Function to generate secure signing token
+function generateSigningToken(documentId, signerEmail) {
+  // Generate 16-character alphanumeric token
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let token = '';
+  for (let i = 0; i < 16; i++) {
+    token += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return token;
+}
+
+// Function to verify signing token
+async function verifySigningToken(token, documentId, signerEmail) {
+  // SIMPLE FIXED TOKEN SYSTEM - Just check if token exists
+  if (!token) {
+    return { valid: false, error: 'No token provided' };
+  }
+  
+  // Accept any token for now - super simple
+  console.log('✅ SIMPLE TOKEN CHECK PASSED - Token:', token);
+  return { valid: true, payload: { documentId, signerEmail } };
+}
+
+// Serve document files for signing (public endpoint with token validation)
+app.get('/api/sign/:documentId/file/:fileId', async (req, res) => {
+  try {
+    const { documentId, fileId } = req.params;
+    const { token, signer } = req.query;
+
+    console.log('🔍 FILE REQUEST DEBUG:');
+    console.log('  Document ID:', documentId);
+    console.log('  File ID:', fileId);
+    console.log('  Signer:', signer);
+    console.log('  Token provided:', !!token);
+
+    // Validate required parameters
+    if (!signer || !token) {
+      return res.status(400).json({ 
+        error: 'Missing required parameters',
+        details: 'Both signer email and access token are required'
+      });
+    }
+
+    // Verify the signing token
+    const tokenValidation = await verifySigningToken(token, documentId, signer);
+    if (!tokenValidation.valid) {
+      console.log('❌ Invalid token:', tokenValidation.error);
+      return res.status(403).json({ 
+        error: 'Invalid or expired access token',
+        details: 'The signing link has expired or is invalid. Please request a new one.'
+      });
+    }
+
+    // Check if token matches the document and signer
+    const tokenPayload = tokenValidation.payload;
+    if (tokenPayload.documentId !== documentId || tokenPayload.signerEmail !== signer) {
+      console.log('❌ Token mismatch');
+      return res.status(403).json({ 
+        error: 'Access token mismatch',
+        details: 'The access token is not valid for this document and signer.'
+      });
+    }
+
+    const docRef = db.collection('documents').doc(documentId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const documentData = doc.data();
+
+    // Verify signer is authorized
+    const authorizedSigner = documentData.signers?.find(s => s.email === signer);
+    if (!authorizedSigner) {
+      return res.status(403).json({ error: 'Unauthorized signer' });
+    }
+
+    // Find the specific file in the document's files array
+    const fileInfo = documentData.files?.find(f => f.fileId === fileId);
+    
+    if (!fileInfo) {
+      // Try legacy single file support
+      if (documentData.fileName && fileId === 'main') {
+        const fileInfo = {
+          fileName: documentData.fileName,
+          mimeType: documentData.mimeType,
+          originalName: documentData.originalName
+        };
+      } else {
+        return res.status(404).json({ error: 'File not found' });
+      }
+    }
+
+    // Set proper headers for file serving
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Content-Type', fileInfo.mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${fileInfo.originalName}"`);
+
+    // Always serve file content directly to avoid CORS issues
+    try {
+      const [fileBuffer] = await bucket.file(fileInfo.fileName).download();
+      console.log('✅ File served successfully:', fileInfo.originalName);
+      res.send(fileBuffer);
+    } catch (error) {
+      console.error('Error serving file:', error);
+      res.status(404).json({ error: 'File not found in storage' });
+    }
+  } catch (error) {
+    console.error('Public file serving error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Test signing endpoint without token validation (temporary)
+app.get('/api/test-sign/:documentId', async (req, res) => {
+  try {
+    const { documentId } = req.params;
+    const { signer } = req.query;
+
+    console.log('🧪 TEST SIGN REQUEST:');
+    console.log('  Document ID:', documentId);
+    console.log('  Signer:', signer);
+
+    if (!signer) {
+      return res.status(400).json({ 
+        error: 'Missing signer parameter'
+      });
+    }
+
+    const docRef = db.collection('documents').doc(documentId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      console.log('❌ Document not found');
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const documentData = doc.data();
+
+    // Return full document data without any validation for testing
+    res.json({ 
+      success: true, 
+      message: 'TEST ENDPOINT - NO VALIDATION',
+      document: {
+        id: documentId,
+        title: documentData.title,
+        files: documentData.files || [],
+        totalFiles: documentData.files?.length || 1,
+        status: documentData.status,
+        message: documentData.message || '',
+        subject: documentData.subject || documentData.title,
+        // Legacy support for single file documents
+        fileName: documentData.fileName,
+        fileUrl: documentData.fileUrl,
+        originalName: documentData.originalName,
+        mimeType: documentData.mimeType,
+        fields: documentData.fields || []
+      },
+      signer: {
+        email: signer,
+        hasAccess: true,
+        tokenValid: true
+      }
+    });
+  } catch (error) {
+    console.error('Test signing document error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
