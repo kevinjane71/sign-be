@@ -92,59 +92,117 @@ class PDFService {
       const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
       const pages = pdfDoc.getPages();
       
-      if (!documentData.fields || documentData.fields.length === 0) {
+      // Get all fields from document (multi-file or single-file)
+      let allFields = [];
+      
+      if (documentData.files && documentData.files.length > 0) {
+        // Multi-file document - collect fields from all files
+        documentData.files.forEach((file, fileIndex) => {
+          if (file.fields && file.fields.length > 0) {
+            file.fields.forEach(field => {
+              allFields.push({
+                ...field,
+                fileIndex: fileIndex, // Map field to specific file/page
+                documentIndex: fileIndex
+              });
+            });
+          }
+        });
+      } else {
+        // Legacy single-file document
+        if (documentData.fields && documentData.fields.length > 0) {
+          allFields = documentData.fields.map(field => ({
+            ...field,
+            fileIndex: 0,
+            documentIndex: 0
+          }));
+        }
+      }
+      
+      if (allFields.length === 0) {
         console.log('ℹ️ No fields to add to PDF');
         return pdfDoc;
       }
 
-      // Group fields by file index for multi-file documents
-      const fieldsByFile = {};
-      documentData.fields.forEach(field => {
-        const fileIndex = field.fileIndex || 0;
-        if (!fieldsByFile[fileIndex]) {
-          fieldsByFile[fileIndex] = [];
+      console.log(`📋 Processing ${allFields.length} fields for PDF embedding`);
+
+      // Group fields by file/page index
+      const fieldsByPage = {};
+      allFields.forEach(field => {
+        const pageIndex = field.fileIndex || field.documentIndex || 0;
+        if (!fieldsByPage[pageIndex]) {
+          fieldsByPage[pageIndex] = [];
         }
-        fieldsByFile[fileIndex].push(field);
+        fieldsByPage[pageIndex].push(field);
       });
 
-      // Process fields for each file/page
-      for (const fileIndex of Object.keys(fieldsByFile)) {
-        const fileFields = fieldsByFile[fileIndex];
-        const pageIndex = parseInt(fileIndex);
+      // Process fields for each page
+      for (const pageIndexStr of Object.keys(fieldsByPage)) {
+        const pageIndex = parseInt(pageIndexStr);
+        const pageFields = fieldsByPage[pageIndex];
         
         if (pageIndex >= pages.length) {
-          console.warn(`⚠️ Page ${pageIndex} not found in PDF`);
+          console.warn(`⚠️ Page ${pageIndex} not found in PDF (total pages: ${pages.length})`);
           continue;
         }
 
         const page = pages[pageIndex];
         const { width: pageWidth, height: pageHeight } = page.getSize();
         
-        for (const field of fileFields) {
+        console.log(`📄 Processing page ${pageIndex}: ${pageFields.length} fields, page size: ${pageWidth}x${pageHeight}`);
+        
+        for (const field of pageFields) {
           const signerFieldData = signerData.fieldValues?.[field.id];
           
-          if (!signerFieldData) {
+          if (!signerFieldData || signerFieldData === '') {
+            console.log(`⏭️ Skipping empty field: ${field.id}`);
             continue; // Skip empty fields
           }
 
-          // Convert field coordinates (assuming they're relative to original image size)
-          const originalWidth = field.originalWidth || pageWidth;
-          const originalHeight = field.originalHeight || pageHeight;
-          
-          const scaleX = pageWidth / originalWidth;
-          const scaleY = pageHeight / originalHeight;
-          
-          const x = field.x * scaleX;
-          const y = pageHeight - (field.y * scaleY) - (field.height * scaleY); // PDF coordinates are bottom-up
-          const width = field.width * scaleX;
-          const height = field.height * scaleY;
+          console.log(`🔧 Processing field: ${field.id} (${field.type}) = ${signerFieldData}`);
 
+          // Calculate field coordinates
+          let x, y, width, height;
+          
+          if (field.leftPercent !== undefined && field.topPercent !== undefined) {
+            // New percentage-based coordinates
+            x = (field.leftPercent / 100) * pageWidth;
+            y = pageHeight - ((field.topPercent / 100) * pageHeight) - ((field.heightPercent / 100) * pageHeight); // PDF coordinates are bottom-up
+            width = (field.widthPercent / 100) * pageWidth;
+            height = (field.heightPercent / 100) * pageHeight;
+          } else if (field.x !== undefined && field.y !== undefined) {
+            // Legacy pixel-based coordinates
+            const originalWidth = field.originalWidth || pageWidth;
+            const originalHeight = field.originalHeight || pageHeight;
+            
+            const scaleX = pageWidth / originalWidth;
+            const scaleY = pageHeight / originalHeight;
+            
+            x = field.x * scaleX;
+            y = pageHeight - (field.y * scaleY) - (field.height * scaleY); // PDF coordinates are bottom-up
+            width = field.width * scaleX;
+            height = field.height * scaleY;
+          } else {
+            console.warn(`⚠️ Field ${field.id} has no valid coordinates`);
+            continue;
+          }
+
+          console.log(`📍 Field coordinates: x=${x.toFixed(2)}, y=${y.toFixed(2)}, w=${width.toFixed(2)}, h=${height.toFixed(2)}`);
+
+          // Render field based on type
           switch (field.type) {
             case 'text':
+            case 'name':
+            case 'email':
+            case 'phone':
             case 'date':
               // Add text field
-              const fontSize = Math.min(height * 0.6, 12); // Scale font size to field height
-              page.drawText(signerFieldData.toString(), {
+              const fontSize = Math.max(8, Math.min(height * 0.6, 14)); // Scale font size appropriately
+              const textValue = signerFieldData.toString();
+              
+              console.log(`✏️ Adding text: "${textValue}" (font size: ${fontSize})`);
+              
+              page.drawText(textValue, {
                 x: x + 2,
                 y: y + (height / 2) - (fontSize / 2),
                 size: fontSize,
@@ -161,6 +219,8 @@ class PDFService {
                 const checkX = x + (width - checkSize) / 2;
                 const checkY = y + (height - checkSize) / 2;
                 
+                console.log(`☑️ Adding checkbox (checked)`);
+                
                 // Draw check mark
                 page.drawText('✓', {
                   x: checkX,
@@ -169,13 +229,18 @@ class PDFService {
                   font: font,
                   color: rgb(0, 0, 0),
                 });
+              } else {
+                console.log(`☐ Skipping unchecked checkbox`);
               }
               break;
 
             case 'signature':
-              // Handle signature image
+            case 'initial':
+              // Handle signature/initial image
               if (signerFieldData && signerFieldData.startsWith('data:image/')) {
                 try {
+                  console.log(`🖋️ Adding signature/initial image`);
+                  
                   // Extract base64 data
                   const base64Data = signerFieldData.split(',')[1];
                   const imageBuffer = Buffer.from(base64Data, 'base64');
@@ -198,7 +263,8 @@ class PDFService {
                 } catch (sigError) {
                   console.error('❌ Signature embedding error:', sigError);
                   // Fallback to text
-                  page.drawText('Signed', {
+                  const fallbackText = field.type === 'initial' ? 'Initialed' : 'Signed';
+                  page.drawText(fallbackText, {
                     x: x + 2,
                     y: y + (height / 2),
                     size: Math.min(height * 0.6, 12),
@@ -206,7 +272,23 @@ class PDFService {
                     color: rgb(0, 0, 0),
                   });
                 }
+              } else {
+                // Text-based signature/initial
+                console.log(`✍️ Adding text signature/initial: "${signerFieldData}"`);
+                const fontSize = Math.max(8, Math.min(height * 0.6, 14));
+                page.drawText(signerFieldData.toString(), {
+                  x: x + 2,
+                  y: y + (height / 2) - (fontSize / 2),
+                  size: fontSize,
+                  font: font,
+                  color: rgb(0, 0, 0),
+                  maxWidth: width - 4,
+                });
               }
+              break;
+
+            default:
+              console.warn(`⚠️ Unknown field type: ${field.type}`);
               break;
           }
         }
@@ -353,4 +435,4 @@ class PDFService {
   }
 }
 
-module.exports = new PDFService(); 
+module.exports = new PDFService();
