@@ -1322,16 +1322,21 @@ app.get('/api/documents', authenticateToken, async (req, res) => {
     console.log('Page:', page, 'Limit:', limit, 'Status:', status);
     console.log('Local mode:', isLocalMode);
 
+    // Base query - always filter by userId first
     let query = db.collection('documents').where('userId', '==', userId);
     
-    // Use orderBy in production mode since composite index is now available
-    // In local mode, skip orderBy to avoid index requirements
-    if (!isLocalMode) {
-      query = query.orderBy('createdAt', 'desc');
-    }
-    
-    if (status) {
+    // Handle status filtering
+    if (status && status !== 'all') {
+      // Add status filter
       query = query.where('status', '==', status);
+      
+      // Skip orderBy when filtering by status to avoid composite index requirements
+      console.log('Status filter applied, skipping orderBy to avoid index issues');
+    } else {
+      // Only use orderBy when not filtering by status (in production mode)
+      if (!isLocalMode) {
+        query = query.orderBy('createdAt', 'desc');
+      }
     }
 
     console.log('Executing query...');
@@ -1348,20 +1353,21 @@ app.get('/api/documents', authenticateToken, async (req, res) => {
     console.log('Documents processed:', documents.length);
 
     // Get total count for pagination (user's documents only)
-    const totalQuery = db.collection('documents').where('userId', '==', userId);
+    let totalQuery = db.collection('documents').where('userId', '==', userId);
+    if (status && status !== 'all') {
+      totalQuery = totalQuery.where('status', '==', status);
+    }
     const totalSnapshot = await totalQuery.get();
     const total = totalSnapshot.size;
 
     console.log('Total documents for user:', total);
 
-    // Sort documents by createdAt in memory only in local mode
-    if (isLocalMode) {
-      documents.sort((a, b) => {
-        const aDate = new Date(a.createdAt);
-        const bDate = new Date(b.createdAt);
-        return bDate - aDate; // Descending order (newest first)
-      });
-    }
+    // Always sort documents by createdAt in memory to ensure consistent ordering
+    documents.sort((a, b) => {
+      const aDate = new Date(a.createdAt);
+      const bDate = new Date(b.createdAt);
+      return bDate - aDate; // Descending order (newest first)
+    });
 
     console.log('=== END DEBUG ===');
 
