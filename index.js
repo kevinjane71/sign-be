@@ -2878,3 +2878,169 @@ app.get('/api/documents/:documentId/download', async (req, res) => {
     res.status(500).json({ error: 'Failed to generate document download' });
   }
 });
+
+// Generate OTP function
+const generateOTP = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+// Forgot Password endpoint
+app.post('/auth/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email is required'
+      });
+    }
+
+    // Get user document from users collection
+    const userSnapshot = await db.collection('users')
+      .where('email', '==', email)
+      .limit(1)
+      .get();
+
+    if (userSnapshot.empty) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    const userDoc = userSnapshot.docs[0];
+    const userData = userDoc.data();
+
+    // Check if user has email login (password set)
+    if (!userData.password) {
+      return res.status(400).json({
+        success: false,
+        error: 'This account was not registered with email/password'
+      });
+    }
+
+    // Generate OTP and expiry time (6 hours from now)
+    const otp = generateOTP();
+    const expiryTime = new Date();
+    expiryTime.setHours(expiryTime.getHours() + 6);
+
+    // Update user document with OTP and expiry
+    await db.collection('users').doc(userDoc.id).update({
+      otpValueReset: otp,
+      otpExpiry: expiryTime.toISOString()
+    });
+
+    // Send OTP email
+    const emailHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #4F46E5;">Password Reset Request</h2>
+        <p>Hello ${userData.name || 'User'},</p>
+        <p>We received a request to reset your password for your SignFlow account. Here is your OTP:</p>
+        <h1 style="font-size: 32px; letter-spacing: 5px; text-align: center; padding: 20px; background-color: #f5f5f5; border-radius: 5px; color: #4F46E5;">${otp}</h1>
+        <p>This OTP will expire in 6 hours.</p>
+        <p>If you didn't request this password reset, please ignore this email.</p>
+        <p>Best regards,<br>SignFlow Team</p>
+      </div>
+    `;
+
+    await emailService.sendEmail({
+      to: email,
+      subject: 'Password Reset OTP - SignFlow',
+      text: `Your password reset OTP is: ${otp}. This OTP will expire in 6 hours.`,
+      html: emailHtml
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'OTP sent successfully'
+    });
+
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+// Reset Password endpoint
+app.post('/auth/reset-password', async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email, OTP, and new password are required'
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: 'Password must be at least 6 characters long'
+      });
+    }
+
+    // Get user document
+    const userSnapshot = await db.collection('users')
+      .where('email', '==', email)
+      .limit(1)
+      .get();
+
+    if (userSnapshot.empty) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    const userDoc = userSnapshot.docs[0];
+    const userData = userDoc.data();
+
+    // Verify OTP and expiry
+    if (!userData.otpValueReset || 
+        userData.otpValueReset !== otp || 
+        !userData.otpExpiry) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid OTP'
+      });
+    }
+
+    // Check OTP expiry
+    const expiryTime = new Date(userData.otpExpiry);
+    if (expiryTime < new Date()) {
+      return res.status(400).json({
+        success: false,
+        error: 'OTP has expired'
+      });
+    }
+
+    // Hash the new password
+    const tokenManager = new TokenManager(db);
+    const hashedPassword = await tokenManager.hashPassword(newPassword);
+
+    // Update password and clear OTP
+    await db.collection('users').doc(userDoc.id).update({
+      password: hashedPassword,
+      otpValueReset: null,
+      otpExpiry: null,
+      lastUpdated: new Date()
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password reset successful'
+    });
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
