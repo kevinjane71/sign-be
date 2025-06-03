@@ -176,7 +176,7 @@ ${documentData.downloadUrl}
 Thank you for using SignFlow.
 
 Best regards,
-SignFlow Team`,
+eSignTap Team`,
 
         html: (documentData) => `
 <!DOCTYPE html>
@@ -252,13 +252,13 @@ SignFlow Team`,
       </div>
       
       <p style="font-size: 13px; color: #6B7280; text-align: center; font-style: italic; margin-bottom: 0;">
-        Keep this document in a secure location. You can download it anytime from your SignFlow dashboard.
+        Keep this document in a secure location. You can download it anytime from your eSingTap dashboard.
       </p>
     </div>
 
     <!-- Footer -->
     <div style="background-color: #F3F4F6; padding: 24px; text-align: center; border-top: 1px solid #E5E7EB;">
-      <p style="color: #6B7280; margin: 0; font-size: 14px;">© ${new Date().getFullYear()} SignFlow. Professional Document Signing.</p>
+      <p style="color: #6B7280; margin: 0; font-size: 14px;">© ${new Date().getFullYear()} eSingTap. Professional Document Signing.</p>
       <div style="margin-top: 16px;">
         <a href="#" style="color: #10B981; text-decoration: none; margin: 0 8px; font-size: 14px;">Dashboard</a>
         <a href="#" style="color: #10B981; text-decoration: none; margin: 0 8px; font-size: 14px;">Help Center</a>

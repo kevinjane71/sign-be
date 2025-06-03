@@ -105,6 +105,12 @@ if (!process.env.FRONTEND_URL && isLocalDevelopment) {
   console.log('🔧 Set FRONTEND_URL to http://localhost:3002 for local development');
 }
 
+// In production, always use the live domain
+if (process.env.NODE_ENV === 'production') {
+  process.env.FRONTEND_URL = 'https://esigntap.com';
+  console.log('🌐 Set FRONTEND_URL to https://esigntap.com for production');
+}
+
 if (isLocalDevelopment) {
   console.log('🔧 Running in LOCAL DEVELOPMENT MODE - Using Firestore without complex queries');
   isLocalMode = true;
@@ -453,7 +459,7 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy', 
     timestamp: new Date().toISOString(),
-    service: 'SignFlow Backend',
+    service: 'SignTap Backend',
     version: '1.0.0',
     test: 'UPDATED_VERSION' // Test marker
   });
@@ -2552,7 +2558,7 @@ Testing email configuration...
 If you received this email, the basic email service is working.
 
 Best regards,
-SignFlow Team`,
+SingTap Team`,
         html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
           <h2 style="color: #4F46E5;">✉️ SignFlow Email Test</h2>
