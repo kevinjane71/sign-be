@@ -12,6 +12,7 @@ const path = require('path');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const emailService = require('./email');
 
 const app = express();
 const PORT = process.env.PORT || 5002;
@@ -437,9 +438,17 @@ let emailTransporter;
   console.log('⚠️  Email service temporarily disabled - emails will be logged to console');
 // }
 
+// Email service is handled by email.js module
+console.log('✅ Email service ready - using email.js for all email functionality');
+
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'API running fine', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    service: 'SignFlow Backend',
+    version: '1.0.0'
+  });
 });
 
 // Authentication Middleware
@@ -1107,110 +1116,57 @@ app.post('/api/documents/:documentId/send', authenticateToken, verifyDocumentOwn
 
     await docRef.update(updateData);
 
-    // Send emails to all signers - TEMPORARILY DISABLED
-    // if (emailTransporter) {
-    //   const emailPromises = signers.map(async (signer) => {
-    //     const signingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}`;
+    // Send professional emails to all signers using EmailService
+    try {
+      // Get sender information
+      const senderDoc = await db.collection('users').doc(req.user.userId).get();
+      const senderData = senderDoc.exists ? senderDoc.data() : null;
+      const senderName = senderData?.name || req.user.email?.split('@')[0] || 'Document Sender';
+      const senderEmail = senderData?.email || req.user.email || 'noreply@signflow.com';
+
+      console.log('=== DOCUMENT SHARING EMAIL DEBUG ===');
+      console.log('📧 Preparing to send emails to signers...');
+      console.log('👤 Sender info:', { senderName, senderEmail });
+      console.log('📋 Signers:', signers.map(s => ({ name: s.name, email: s.email })));
+      console.log('📄 Document:', { title: documentData.title, originalName: documentData.originalName });
+
+      // Send email to each signer
+      const emailPromises = signers.map(async (signer) => {
+        const signingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3002'}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}`;
         
-    //     const emailHtml = `
-    //       <!DOCTYPE html>
-    //       <html>
-    //       <head>
-    //         <meta charset="utf-8">
-    //         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    //         <title>Document Signature Request</title>
-    //       </head>
-    //       <body style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f5f7fa;">
-    //         <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);">
-    //           <!-- Header -->
-    //           <div style="background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); padding: 40px 20px; text-align: center;">
-    //             <div style="font-size: 50px; margin-bottom: 15px;">📝✍️</div>
-    //             <h1 style="color: #ffffff; margin: 0; font-size: 28px; letter-spacing: 0.5px;">Signature Request</h1>
-    //             <p style="color: #E0E7FF; margin-top: 10px; font-size: 16px;">
-    //               You have a document waiting for your signature
-    //             </p>
-    //           </div>
+        const emailData = {
+          signerEmail: signer.email,
+          signerName: signer.name || signer.email.split('@')[0],
+          documentTitle: documentData.title || documentData.originalName || 'Document',
+          senderName: senderName,
+          senderEmail: senderEmail,
+          message: message || '',
+          signingUrl: signingUrl
+        };
 
-    //           <!-- Main Content -->
-    //           <div style="padding: 32px 24px; background-color: #ffffff;">
-    //             <p style="font-size: 16px; color: #4B5563; margin-top: 0;">Dear ${signer.name || signer.email},</p>
-                
-    //             <div style="background-color: #F3F4F6; border-left: 4px solid #4F46E5; padding: 16px; margin: 24px 0; border-radius: 4px;">
-    //               <p style="font-size: 16px; color: #4B5563; margin: 0;">
-    //                 <strong style="color: #4F46E5;">Document Owner</strong> has sent you a document that requires your signature.
-    //               </p>
-    //             </div>
-
-    //             ${message ? `
-    //             <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; padding: 20px; margin: 24px 0;">
-    //               <h3 style="margin: 0 0 12px 0; color: #111827; font-size: 16px;">Message from sender:</h3>
-    //               <p style="margin: 0; color: #4B5563; font-style: italic;">"${message}"</p>
-    //             </div>
-    //             ` : ''}
-
-    //             <!-- Document Info -->
-    //             <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; padding: 20px; margin: 24px 0;">
-    //               <div style="display: flex; align-items: center; margin-bottom: 16px;">
-    //                 <div style="width: 24px; height: 24px; margin-right: 12px; color: #4F46E5;">
-    //                   <span style="font-size: 24px;">📄</span>
-    //                 </div>
-    //                 <div>
-    //                   <p style="margin: 0; font-size: 14px; color: #6B7280;">Document</p>
-    //                   <p style="margin: 0; font-size: 16px; font-weight: 500; color: #111827;">${documentData.title || documentData.originalName || 'Document'}</p>
-    //                 </div>
-    //               </div>
-    //               <div style="display: flex; align-items: center;">
-    //                 <div style="width: 24px; height: 24px; margin-right: 12px; color: #4F46E5;">
-    //                   <span style="font-size: 24px;">⏰</span>
-    //                 </div>
-    //                 <div>
-    //                   <p style="margin: 0; font-size: 14px; color: #6B7280;">Sent</p>
-    //                   <p style="margin: 0; font-size: 16px; font-weight: 500; color: #111827;">${new Date().toLocaleString()}</p>
-    //                 </div>
-    //               </div>
-    //             </div>
-
-    //             <!-- Action Button -->
-    //             <div style="text-align: center; margin: 32px 0 24px 0;">
-    //               <a href="${signingUrl}" 
-    //                  style="display: inline-block; background: #4F46E5; color: white; padding: 14px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; margin: 8px; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 4px 6px rgba(79, 70, 229, 0.25);">
-    //                 Review & Sign Document
-    //               </a>
-    //             </div>
-                
-    //             <p style="font-size: 14px; color: #6B7280; text-align: center; font-style: italic; margin-bottom: 0;">
-    //               This signature request will expire in 30 days.
-    //             </p>
-    //           </div>
-
-    //           <!-- Footer -->
-    //           <div style="background-color: #F3F4F6; padding: 24px; text-align: center; border-top: 1px solid #E5E7EB;">
-    //             <p style="color: #6B7280; margin: 0; font-size: 14px;">© ${new Date().getFullYear()} SignApp. All rights reserved.</p>
-    //           </div>
-    //         </div>
-    //       </body>
-    //       </html>
-    //     `;
-
-    //     const mailOptions = {
-    //       from: process.env.GODADY_EMAIL_SNAPYFORM,
-    //       to: signer.email,
-    //       subject: subject || `📝 Signature Request: ${documentData.originalName}`,
-    //       html: emailHtml
-    //     };
-
-    //     return emailTransporter.sendMail(mailOptions);
-    //   });
-
-    //   await Promise.all(emailPromises);
-    // } else {
-      // Log email details instead of sending
-      console.log('📧 Email sending temporarily disabled - would send to signers:');
-      signers.forEach(signer => {
-        const signingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3003'}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}`;
-        console.log(`   📩 ${signer.name} (${signer.email}): ${signingUrl}`);
+        console.log(`📧 Sending signature request to: ${signer.email}`);
+        console.log('📋 Email data:', emailData);
+        
+        try {
+          const result = await emailService.sendDocumentShareEmail(emailData);
+          console.log(`✅ Email sent successfully to ${signer.email}:`, result);
+          return result;
+        } catch (emailError) {
+          console.error(`❌ Email failed for ${signer.email}:`, emailError);
+          throw emailError;
+        }
       });
-    // }
+
+      const emailResults = await Promise.all(emailPromises);
+      console.log(`✅ Successfully sent ${signers.length} signature request emails`);
+      console.log('📬 Email results:', emailResults);
+      console.log('=== END EMAIL DEBUG ===');
+    } catch (emailError) {
+      console.error('Email sending error:', emailError);
+      console.error('Email error stack:', emailError.stack);
+      // Don't fail the whole request if email fails - just log it
+      console.log('⚠️ Document sent successfully but email notifications failed');
+    }
 
     res.json({ 
       success: true, 
@@ -1298,6 +1254,58 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
     }
 
     await docRef.update(updateData);
+
+    // Send completion email if all signers have signed
+    if (allSigned) {
+      try {
+        // Get document owner information
+        const ownerDoc = await db.collection('users').doc(documentData.userId).get();
+        const ownerData = ownerDoc.exists ? ownerDoc.data() : null;
+        const documentTitle = documentData.title || documentData.originalName || 'Document';
+        
+        // Create download URL (you may need to adjust this based on your file storage setup)
+        const downloadUrl = `${process.env.FRONTEND_URL || 'http://localhost:3002'}/dashboard`;
+        
+        // Send completion email to document owner
+        const ownerEmailData = {
+          recipientEmail: ownerData?.email || documentData.createdBy?.email,
+          recipientName: ownerData?.name || documentData.createdBy?.name || 'Document Owner',
+          documentTitle: documentTitle,
+          signers: updatedSigners.filter(s => s.signed).map(s => ({
+            name: s.name || s.email.split('@')[0],
+            email: s.email
+          })),
+          downloadUrl: downloadUrl
+        };
+
+        console.log(`📧 Sending completion notification to document owner: ${ownerEmailData.recipientEmail}`);
+        await emailService.sendDocumentCompletedEmail(ownerEmailData);
+
+        // Also send completion notification to all signers
+        const signerEmailPromises = updatedSigners.filter(s => s.signed).map(async (signer) => {
+          const signerEmailData = {
+            recipientEmail: signer.email,
+            recipientName: signer.name || signer.email.split('@')[0],
+            documentTitle: documentTitle,
+            signers: updatedSigners.filter(s => s.signed).map(s => ({
+              name: s.name || s.email.split('@')[0],
+              email: s.email
+            })),
+            downloadUrl: downloadUrl
+          };
+
+          console.log(`📧 Sending completion notification to signer: ${signer.email}`);
+          return emailService.sendDocumentCompletedEmail(signerEmailData);
+        });
+
+        await Promise.all(signerEmailPromises);
+        console.log(`✅ Successfully sent completion notifications to ${updatedSigners.length + 1} recipients`);
+      } catch (emailError) {
+        console.error('Completion email sending error:', emailError);
+        // Don't fail the request if email fails - just log it
+        console.log('⚠️ Document completed successfully but email notifications failed');
+      }
+    }
 
     res.json({ 
       success: true, 
@@ -2380,6 +2388,125 @@ app.post('/auth/:provider', async (req, res) => {
       success: false,
       error: 'Internal server error during authentication',
       details: error.message
+    });
+  }
+});
+
+// Test email endpoint for debugging
+app.post('/api/test-email', async (req, res) => {
+  try {
+    const { to } = req.body;
+    const testEmail = to || 'malik.vk07@gmail.com';
+
+    console.log('🧪 Testing email functionality...');
+    console.log('📧 Sending test email to:', testEmail);
+
+    // Simple test email data
+    const testEmailData = {
+      signerEmail: testEmail,
+      signerName: 'Test User',
+      documentTitle: 'Test Document - Email Configuration Check',
+      senderName: 'SignFlow System',
+      senderEmail: 'system@signflow.com',
+      message: 'This is a test email to verify email configuration is working properly.',
+      signingUrl: 'https://example.com/test-signing-url'
+    };
+
+    // Send test email using the document share template
+    const result = await emailService.sendDocumentShareEmail(testEmailData);
+    
+    console.log('✅ Test email sent successfully');
+    console.log('📬 Email result:', result);
+
+    res.json({ 
+      success: true, 
+      message: `Test email sent successfully to ${testEmail}`,
+      emailResult: result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Test email failed:', error);
+    console.error('📧 Email error details:', error.message);
+    
+    // Try to send a basic email without templates as fallback
+    try {
+      console.log('🔄 Trying basic email without templates...');
+      
+      const basicResult = await emailService.sendEmail({
+        to: req.body.to || 'malik.vk07@gmail.com',
+        subject: '✉️ SignFlow Email Test - Basic',
+        text: `This is a basic test email from SignFlow.
+        
+Time: ${new Date().toLocaleString()}
+Testing email configuration...
+
+If you received this email, the basic email service is working.
+
+Best regards,
+SignFlow Team`,
+        html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #4F46E5;">✉️ SignFlow Email Test</h2>
+          <p>This is a basic test email from SignFlow.</p>
+          <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <strong>Time:</strong> ${new Date().toLocaleString()}<br>
+            <strong>Status:</strong> Testing email configuration...
+          </div>
+          <p>If you received this email, the basic email service is working.</p>
+          <hr style="margin: 20px 0;">
+          <p style="color: #666; font-size: 14px;">Best regards,<br>SignFlow Team</p>
+        </div>`
+      });
+
+      console.log('✅ Basic email sent successfully');
+      
+      res.json({ 
+        success: true, 
+        message: 'Template email failed but basic email sent successfully',
+        basicEmailResult: basicResult,
+        templateError: error.message,
+        timestamp: new Date().toISOString()
+      });
+    } catch (basicError) {
+      console.error('❌ Basic email also failed:', basicError);
+      res.status(500).json({ 
+        success: false,
+        error: 'Both template and basic email failed',
+        templateError: error.message,
+        basicError: basicError.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+});
+
+// Email configuration check endpoint
+app.get('/api/email-config', async (req, res) => {
+  try {
+    console.log('🔍 Checking email configuration...');
+    
+    const config = {
+      host: 'smtpout.secureserver.net',
+      port: 465,
+      secure: true,
+      hasEmailCredentials: !!(process.env.GODADY_EMAIL && process.env.GODADY_PA),
+      emailUser: process.env.GODADY_EMAIL ? process.env.GODADY_EMAIL.substring(0, 3) + '***' : 'NOT_SET',
+      passwordSet: !!process.env.GODADY_PA
+    };
+
+    console.log('📧 Email config check:', config);
+
+    res.json({
+      success: true,
+      config: config,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Email config check failed:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
     });
   }
 });
