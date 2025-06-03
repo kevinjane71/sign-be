@@ -874,6 +874,41 @@ app.get('/api/documents/:documentId/file/:fileId', authenticateToken, verifyDocu
   }
 });
 
+// Get document statistics for dashboard - Now requires authentication and filters by user
+// MOVED HERE: This route must come before /api/documents/:documentId to avoid routing conflicts
+app.get('/api/documents/stats', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const documentsRef = db.collection('documents').where('userId', '==', userId);
+    
+    // Get all user's documents
+    const allDocsSnapshot = await documentsRef.get();
+    const total = allDocsSnapshot.size;
+
+    // Count by status
+    const stats = {
+      total: total,
+      draft: 0,
+      sent: 0,
+      partially_signed: 0,
+      completed: 0,
+      cancelled: 0
+    };
+
+    allDocsSnapshot.forEach(doc => {
+      const data = doc.data();
+      if (stats.hasOwnProperty(data.status)) {
+        stats[data.status]++;
+      }
+    });
+
+    res.json({ success: true, stats });
+  } catch (error) {
+    console.error('Get document stats error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Get document by ID - Now requires authentication
 app.get('/api/documents/:documentId', authenticateToken, verifyDocumentOwnership, async (req, res) => {
   try {
@@ -1424,40 +1459,6 @@ app.post('/api/documents/:documentId/duplicate', authenticateToken, verifyDocume
     });
   } catch (error) {
     console.error('Duplicate document error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Get document statistics for dashboard - Now requires authentication and filters by user
-app.get('/api/documents/stats', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const documentsRef = db.collection('documents').where('userId', '==', userId);
-    
-    // Get all user's documents
-    const allDocsSnapshot = await documentsRef.get();
-    const total = allDocsSnapshot.size;
-
-    // Count by status
-    const stats = {
-      total: total,
-      draft: 0,
-      sent: 0,
-      partially_signed: 0,
-      completed: 0,
-      cancelled: 0
-    };
-
-    allDocsSnapshot.forEach(doc => {
-      const data = doc.data();
-      if (stats.hasOwnProperty(data.status)) {
-        stats[data.status]++;
-      }
-    });
-
-    res.json({ success: true, stats });
-  } catch (error) {
-    console.error('Get document stats error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -2088,7 +2089,7 @@ app.post('/auth/:provider', async (req, res) => {
             });
           }
         } catch (googleError) {
-          console.error('Google OAuth error:', googleError);
+          // Silenced: console.error('Google OAuth error:', googleError); // Too spammy
           
           if (googleError.message && googleError.message.includes('invalid_client')) {
             return res.status(400).json({
