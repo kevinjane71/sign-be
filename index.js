@@ -1249,12 +1249,35 @@ app.get('/api/sign/:documentId', async (req, res) => {
 
     const documentData = doc.data();
 
-    // SIMPLIFIED: Skip signer authorization check for now
-    console.log('✅ Document access granted (simplified)');
+    // Check if this signer has already signed
+    const signerInfo = documentData.signers?.find(s => s.email === signer);
+    if (signerInfo && signerInfo.signed) {
+      console.log('✅ Signer has already signed - redirecting to completed view');
+      return res.json({ 
+        success: true,
+        alreadySigned: true,
+        message: 'You have already signed this document',
+        document: {
+          id: documentId,
+          title: documentData.title,
+          status: documentData.status,
+          completedAt: signerInfo.signedAt,
+          canDownload: documentData.status === 'completed'
+        },
+        signer: {
+          email: signer,
+          signedAt: signerInfo.signedAt,
+          alreadySigned: true
+        }
+      });
+    }
+
+    console.log('✅ Document access granted for signing');
 
     // Return full document data including files for rendering
     res.json({ 
-      success: true, 
+      success: true,
+      alreadySigned: false,
       document: {
         id: documentId,
         title: documentData.title,
@@ -1274,7 +1297,8 @@ app.get('/api/sign/:documentId', async (req, res) => {
         email: signer,
         name: signer.split('@')[0],
         hasAccess: true,
-        tokenValid: true
+        tokenValid: true,
+        alreadySigned: false
       }
     });
   } catch (error) {
@@ -2777,5 +2801,80 @@ app.get('/api/test-sign/:documentId', async (req, res) => {
   } catch (error) {
     console.error('Test signing document error:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get document status (public endpoint for checking completion)
+app.get('/api/documents/:documentId/status', async (req, res) => {
+  try {
+    const { documentId } = req.params;
+
+    const docRef = db.collection('documents').doc(documentId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const documentData = doc.data();
+
+    res.json({ 
+      success: true, 
+      document: {
+        id: documentId,
+        title: documentData.title,
+        status: documentData.status,
+        signers: documentData.signers || [],
+        completedAt: documentData.completedAt,
+        createdAt: documentData.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Get document status error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Download completed document (public endpoint)
+app.get('/api/documents/:documentId/download', async (req, res) => {
+  try {
+    const { documentId } = req.params;
+
+    const docRef = db.collection('documents').doc(documentId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const documentData = doc.data();
+
+    // Check if document is completed
+    if (documentData.status !== 'completed') {
+      return res.status(400).json({ error: 'Document is not yet completed' });
+    }
+
+    // Generate completed document with all signatures
+    const signersData = documentData.signers.filter(signer => signer.signed);
+    const completedDoc = await pdfService.generateCompletedDocument(documentData, signersData);
+
+    // Set headers for download
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${completedDoc.filename}"`);
+    res.setHeader('Content-Length', completedDoc.buffer.length);
+
+    // Send the PDF buffer
+    res.send(completedDoc.buffer);
+
+    // Clean up temp file
+    if (completedDoc.tempFilePath) {
+      setTimeout(() => {
+        pdfService.cleanupTempFile(completedDoc.tempFilePath);
+      }, 1000);
+    }
+
+  } catch (error) {
+    console.error('Download document error:', error);
+    res.status(500).json({ error: 'Failed to generate document download' });
   }
 });
