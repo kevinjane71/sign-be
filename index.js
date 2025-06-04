@@ -105,12 +105,6 @@ if (!process.env.FRONTEND_URL && isLocalDevelopment) {
   console.log('🔧 Set FRONTEND_URL to http://localhost:3002 for local development');
 }
 
-// In production, always use the live domain
-if (process.env.NODE_ENV === 'production') {
-  process.env.FRONTEND_URL = 'https://esigntap.com';
-  console.log('🌐 Set FRONTEND_URL to https://esigntap.com for production');
-}
-
 if (isLocalDevelopment) {
   console.log('🔧 Running in LOCAL DEVELOPMENT MODE - Using Firestore without complex queries');
   isLocalMode = true;
