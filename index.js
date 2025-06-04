@@ -1249,6 +1249,29 @@ app.get('/api/sign/:documentId', async (req, res) => {
 
     const documentData = doc.data();
 
+    // Find the current signer's userId from the signers array
+    let currentSignerId = null;
+    if (Array.isArray(documentData.signers)) {
+      const found = documentData.signers.find(s => s.email === signer);
+      if (found) currentSignerId = found.id || found.userId || null;
+    }
+
+    // Filter fields for this signer using assignedSigner (userId)
+    let filteredFiles = [];
+    if (documentData.files && Array.isArray(documentData.files)) {
+      filteredFiles = documentData.files.map(file => ({
+        ...file,
+        fields: Array.isArray(file.fields)
+          ? file.fields.filter(field => !field.assignedSigner || field.assignedSigner === currentSignerId)
+          : []
+      }));
+    }
+    // Legacy support for single file documents
+    let filteredFields = [];
+    if (documentData.fields && Array.isArray(documentData.fields)) {
+      filteredFields = documentData.fields.filter(field => !field.assignedSigner || field.assignedSigner === currentSignerId);
+    }
+
     // Check if this signer has already signed
     const signerInfo = documentData.signers?.find(s => s.email === signer);
     if (signerInfo && signerInfo.signed) {
@@ -1274,15 +1297,15 @@ app.get('/api/sign/:documentId', async (req, res) => {
 
     console.log('✅ Document access granted for signing');
 
-    // Return full document data including files for rendering
+    // Return filtered document data including only allowed fields
     res.json({ 
       success: true,
       alreadySigned: false,
       document: {
         id: documentId,
         title: documentData.title,
-        files: documentData.files || [],
-        totalFiles: documentData.files?.length || 1,
+        files: filteredFiles,
+        totalFiles: filteredFiles.length || 1,
         status: documentData.status,
         message: documentData.message || '',
         subject: documentData.subject || documentData.title,
@@ -1291,7 +1314,7 @@ app.get('/api/sign/:documentId', async (req, res) => {
         fileUrl: documentData.fileUrl,
         originalName: documentData.originalName,
         mimeType: documentData.mimeType,
-        fields: documentData.fields || []
+        fields: filteredFields
       },
       signer: {
         email: signer,
@@ -2817,6 +2840,11 @@ app.get('/api/documents/:documentId/status', async (req, res) => {
     }
 
     const documentData = doc.data();
+    const signers = documentData.signers || [];
+    const allSigned = signers.length > 0 && signers.every(s => s.signed);
+    const downloadUrl = documentData.status === 'completed'
+      ? `${process.env.FRONTEND_URL || 'http://localhost:3002'}/api/documents/${documentId}/download`
+      : null;
 
     res.json({ 
       success: true, 
@@ -2824,9 +2852,11 @@ app.get('/api/documents/:documentId/status', async (req, res) => {
         id: documentId,
         title: documentData.title,
         status: documentData.status,
-        signers: documentData.signers || [],
+        signers: signers,
         completedAt: documentData.completedAt,
-        createdAt: documentData.createdAt
+        createdAt: documentData.createdAt,
+        allSigned,
+        downloadUrl
       }
     });
   } catch (error) {
