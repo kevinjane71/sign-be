@@ -1412,7 +1412,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
           recipientName: ownerData?.name || documentData.createdBy?.name || 'Document Owner',
           documentTitle: documentTitle,
           signers: signersList,
-          downloadUrl: `${process.env.FRONTEND_URL || 'http://localhost:3002'}/sign-complete?document=${documentId}`
+          downloadUrl: `${process.env.FRONTEND_URL || 'http://localhost:3002'}/api/documents/${documentId}/download`
         };
 
         console.log(`📧 Sending completed PDF to document owner: ${ownerEmailData.recipientEmail}`);
@@ -1425,7 +1425,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
             recipientName: signer.name || signer.email.split('@')[0],
             documentTitle: documentTitle,
             signers: signersList,
-            downloadUrl: `${process.env.FRONTEND_URL || 'http://localhost:3002'}/sign-complete?document=${documentId}&signer=${encodeURIComponent(signer.email)}`
+            downloadUrl: `${process.env.FRONTEND_URL || 'http://localhost:3002'}/api/documents/${documentId}/download`
           };
 
           console.log(`📧 Sending completed PDF to signer: ${signer.email}`);
@@ -1453,7 +1453,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
       message: 'Signature submitted successfully',
       allSigned: allSigned,
       documentStatus: updateData.status,
-      downloadUrl: allSigned ? `${process.env.FRONTEND_URL || 'http://localhost:3002'}/sign-complete?document=${documentId}` : null
+      downloadUrl: allSigned ? `${process.env.FRONTEND_URL || 'http://localhost:3002'}/api/documents/${documentId}/download` : null
     });
   } catch (error) {
     console.error('Submit signature error:', error);
