@@ -236,15 +236,13 @@ class PDFService {
 
             case 'signature':
             case 'initial':
-              // Handle signature/initial image
+              // Handle signature/initial image or text
               if (signerFieldData && signerFieldData.startsWith('data:image/')) {
                 try {
                   console.log(`🖋️ Adding signature/initial image`);
-                  
                   // Extract base64 data
                   const base64Data = signerFieldData.split(',')[1];
                   const imageBuffer = Buffer.from(base64Data, 'base64');
-                  
                   // Embed image
                   let signatureImage;
                   if (signerFieldData.includes('data:image/png')) {
@@ -252,7 +250,6 @@ class PDFService {
                   } else {
                     signatureImage = await pdfDoc.embedJpg(imageBuffer);
                   }
-
                   // Draw signature
                   page.drawImage(signatureImage, {
                     x: x,
@@ -272,7 +269,7 @@ class PDFService {
                     color: rgb(0, 0, 0),
                   });
                 }
-              } else {
+              } else if (signerFieldData) {
                 // Text-based signature/initial
                 console.log(`✍️ Adding text signature/initial: "${signerFieldData}"`);
                 const fontSize = Math.max(8, Math.min(height * 0.6, 14));
@@ -312,40 +309,172 @@ class PDFService {
       console.log(`👥 Processing ${signersData.length} signer(s)`);
 
       const mergedPDF = await PDFDocument.create();
-      
-      // Handle single file or multi-file document
+      const filePageStartIndices = []; // Track the starting global page index for each file
+      let totalPages = 0;
       const files = documentData.files || [documentData];
-      
+      const filePagesList = [];
+
+      // 1. Copy all pages from all files, and track mapping
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const fileUrl = file.fileUrl || file.url;
-        
         console.log(`📥 Processing file ${i + 1}/${files.length}: ${fileUrl}`);
-        
-        // Download file
         const fileBuffer = await this.downloadFile(fileUrl);
-        
-        // Convert to PDF if needed
         let pdfBuffer;
         if (this.isPDF(fileBuffer)) {
           pdfBuffer = fileBuffer;
         } else {
           pdfBuffer = await this.imageToPDF(fileBuffer);
         }
-        
-        // Load PDF
         const sourcePDF = await PDFDocument.load(pdfBuffer);
-        
-        // Copy pages to merged PDF
-        const pages = await mergedPDF.copyPages(sourcePDF, sourcePDF.getPageIndices());
+        const pageIndices = sourcePDF.getPageIndices();
+        const pages = await mergedPDF.copyPages(sourcePDF, pageIndices);
+        filePageStartIndices.push(totalPages); // Start index for this file
+        filePagesList.push(pages.length); // Number of pages in this file
         pages.forEach(page => mergedPDF.addPage(page));
+        totalPages += pages.length;
       }
 
-      // Add fields from all signers
+      // 2. Build a mapping: (fileIndex, pageNumber) => globalPageIndex
+      const filePageToGlobalPage = {};
+      for (let fileIdx = 0; fileIdx < filePagesList.length; fileIdx++) {
+        const numPages = filePagesList[fileIdx];
+        for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+          filePageToGlobalPage[`${fileIdx}_${pageNum}`] = filePageStartIndices[fileIdx] + (pageNum - 1);
+        }
+      }
+
+      // 3. Add fields from all signers to the correct global page
       for (const signerData of signersData) {
         if (signerData.signed && signerData.fieldValues) {
           console.log(`📝 Adding fields for signer: ${signerData.email}`);
-          await this.addFieldsToPDF(mergedPDF, documentData, signerData);
+          // Get all fields from all files
+          let allFields = [];
+          if (documentData.files && documentData.files.length > 0) {
+            documentData.files.forEach((file, fileIndex) => {
+              if (file.fields && file.fields.length > 0) {
+                file.fields.forEach(field => {
+                  allFields.push({ ...field, fileIndex: fileIndex, documentIndex: fileIndex });
+                });
+              }
+            });
+          } else if (documentData.fields && documentData.fields.length > 0) {
+            allFields = documentData.fields.map(field => ({ ...field, fileIndex: 0, documentIndex: 0 }));
+          }
+
+          for (const field of allFields) {
+            const signerFieldData = signerData.fieldValues?.[field.id];
+            if (!signerFieldData || signerFieldData === '') continue;
+            // Determine correct global page index
+            const pageNum = field.pageNumber || 1;
+            const fileIdx = field.fileIndex || field.documentIndex || 0;
+            const globalPageIndex = filePageToGlobalPage[`${fileIdx}_${pageNum}`];
+            if (globalPageIndex === undefined) {
+              console.warn(`⚠️ No global page index for file ${fileIdx}, page ${pageNum}`);
+              continue;
+            }
+            const page = mergedPDF.getPages()[globalPageIndex];
+            const { width: pageWidth, height: pageHeight } = page.getSize();
+            // Calculate field coordinates (same as before)
+            let x, y, width, height;
+            if (field.leftPercent !== undefined && field.topPercent !== undefined) {
+              x = (field.leftPercent / 100) * pageWidth;
+              y = pageHeight - ((field.topPercent / 100) * pageHeight) - ((field.heightPercent / 100) * pageHeight);
+              width = (field.widthPercent / 100) * pageWidth;
+              height = (field.heightPercent / 100) * pageHeight;
+            } else if (field.x !== undefined && field.y !== undefined) {
+              const originalWidth = field.originalWidth || pageWidth;
+              const originalHeight = field.originalHeight || pageHeight;
+              const scaleX = pageWidth / originalWidth;
+              const scaleY = pageHeight / originalHeight;
+              x = field.x * scaleX;
+              y = pageHeight - (field.y * scaleY) - (field.height * scaleY);
+              width = field.width * scaleX;
+              height = field.height * scaleY;
+            } else {
+              console.warn(`⚠️ Field ${field.id} has no valid coordinates`);
+              continue;
+            }
+            // Render field based on type (reuse logic from addFieldsToPDF)
+            const font = await mergedPDF.embedFont(StandardFonts.Helvetica);
+            switch (field.type) {
+              case 'text':
+              case 'name':
+              case 'email':
+              case 'phone':
+              case 'date': {
+                const fontSize = Math.max(8, Math.min(height * 0.6, 14));
+                const textValue = signerFieldData.toString();
+                page.drawText(textValue, {
+                  x: x + 2,
+                  y: y + (height / 2) - (fontSize / 2),
+                  size: fontSize,
+                  font: font,
+                  color: rgb(0, 0, 0),
+                  maxWidth: width - 4,
+                });
+                break;
+              }
+              case 'checkbox': {
+                if (signerFieldData === true || signerFieldData === 'true') {
+                  const checkSize = Math.min(width, height) * 0.8;
+                  const checkX = x + (width - checkSize) / 2;
+                  const checkY = y + (height - checkSize) / 2;
+                  page.drawText('X', {
+                    x: checkX,
+                    y: checkY,
+                    size: checkSize,
+                    font: font,
+                    color: rgb(0, 0, 0),
+                  });
+                }
+                break;
+              }
+              case 'signature':
+              case 'initial': {
+                if (signerFieldData && signerFieldData.startsWith('data:image/')) {
+                  try {
+                    const base64Data = signerFieldData.split(',')[1];
+                    const imageBuffer = Buffer.from(base64Data, 'base64');
+                    let signatureImage;
+                    if (signerFieldData.includes('data:image/png')) {
+                      signatureImage = await mergedPDF.embedPng(imageBuffer);
+                    } else {
+                      signatureImage = await mergedPDF.embedJpg(imageBuffer);
+                    }
+                    page.drawImage(signatureImage, {
+                      x: x,
+                      y: y,
+                      width: width,
+                      height: height,
+                    });
+                  } catch (sigError) {
+                    const fallbackText = field.type === 'initial' ? 'Initialed' : 'Signed';
+                    page.drawText(fallbackText, {
+                      x: x + 2,
+                      y: y + (height / 2),
+                      size: Math.min(height * 0.6, 12),
+                      font: font,
+                      color: rgb(0, 0, 0),
+                    });
+                  }
+                } else if (signerFieldData) {
+                  const fontSize = Math.max(8, Math.min(height * 0.6, 14));
+                  page.drawText(signerFieldData.toString(), {
+                    x: x + 2,
+                    y: y + (height / 2) - (fontSize / 2),
+                    size: fontSize,
+                    font: font,
+                    color: rgb(0, 0, 0),
+                    maxWidth: width - 4,
+                  });
+                }
+                break;
+              }
+              default:
+                break;
+            }
+          }
         }
       }
 
@@ -359,7 +488,6 @@ class PDFService {
 
       const pdfBytes = await mergedPDF.save();
       console.log('✅ Document merge and field filling completed successfully');
-      
       return Buffer.from(pdfBytes);
     } catch (error) {
       console.error('❌ Merge documents with fields error:', error);
