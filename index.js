@@ -3044,3 +3044,169 @@ app.post('/auth/reset-password', async (req, res) => {
     });
   }
 });
+
+// --- Signature & Stamp Management API ---
+// Firestore collection: user_signatures
+// Fields: userId, alias, type ('sign'|'stamp'), imageUrl, createdAt, updatedAt
+// Limits: max 10 per type per user, max 20MB per image, alias unique per user/type
+
+const SIGNATURE_COLLECTION = 'user_signatures';
+const MAX_SIGNS_PER_TYPE = 10;
+const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20MB
+
+// List all signatures/stamps for user
+app.get('/api/user/signatures', authenticateToken, async (req, res) => {
+  try {
+    const { type } = req.query;
+    let query = db.collection(SIGNATURE_COLLECTION).where('userId', '==', req.user.userId);
+    if (type) query = query.where('type', '==', type);
+    const snap = await query.get();
+    const results = [];
+    snap.forEach(doc => results.push({ id: doc.id, ...doc.data() }));
+    res.json({ success: true, items: results });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch signatures' });
+  }
+});
+
+// Add new signature/stamp (draw/upload)
+app.post('/api/user/signatures', authenticateToken, upload.single('image'), async (req, res) => {
+  try {
+    const { alias, type } = req.body;
+    if (!alias || !type || !['sign', 'stamp'].includes(type)) {
+      return res.status(400).json({ error: 'Alias and valid type required' });
+    }
+    // Check count
+    const existingSnap = await db.collection(SIGNATURE_COLLECTION)
+      .where('userId', '==', req.user.userId)
+      .where('type', '==', type).get();
+    if (existingSnap.size >= MAX_SIGNS_PER_TYPE) {
+      return res.status(400).json({ error: `Max ${MAX_SIGNS_PER_TYPE} ${type}s allowed` });
+    }
+    // Check alias uniqueness
+    let aliasExists = false;
+    existingSnap.forEach(doc => { if (doc.data().alias === alias) aliasExists = true; });
+    if (aliasExists) {
+      return res.status(400).json({ error: 'Alias must be unique' });
+    }
+    // Validate image
+    let imageUrl = null;
+    if (req.file) {
+      if (req.file.size > MAX_IMAGE_SIZE) {
+        return res.status(400).json({ error: 'Image too large (max 20MB)' });
+      }
+      const ext = path.extname(req.file.originalname).toLowerCase();
+      if (!['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) {
+        return res.status(400).json({ error: 'Invalid image type' });
+      }
+      const fileName = `user_signatures/${req.user.userId}/${Date.now()}_${alias}${ext}`;
+      await bucket.file(fileName).save(req.file.buffer, { contentType: req.file.mimetype });
+      imageUrl = isLocalMode
+        ? `/uploads/${fileName}`
+        : `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+    } else if (req.body.imageDataUrl) {
+      // Handle base64 data URL
+      const matches = req.body.imageDataUrl.match(/^data:(image\/\w+);base64,(.+)$/);
+      if (!matches) return res.status(400).json({ error: 'Invalid image data' });
+      const buffer = Buffer.from(matches[2], 'base64');
+      if (buffer.length > MAX_IMAGE_SIZE) {
+        return res.status(400).json({ error: 'Image too large (max 20MB)' });
+      }
+      const ext = matches[1].split('/')[1];
+      const fileName = `user_signatures/${req.user.userId}/${Date.now()}_${alias}.${ext}`;
+      await bucket.file(fileName).save(buffer, { contentType: matches[1] });
+      imageUrl = isLocalMode
+        ? `/uploads/${fileName}`
+        : `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+    } else {
+      return res.status(400).json({ error: 'Image required' });
+    }
+    // Save metadata
+    const docRef = await db.collection(SIGNATURE_COLLECTION).add({
+      userId: req.user.userId,
+      alias,
+      type,
+      imageUrl,
+      createdAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp(),
+      updatedAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
+    });
+    res.json({ success: true, id: docRef.id, imageUrl });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to save signature' });
+  }
+});
+
+// Update signature/stamp (alias or image)
+app.put('/api/user/signatures/:id', authenticateToken, upload.single('image'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { alias } = req.body;
+    const docRef = db.collection(SIGNATURE_COLLECTION).doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists || doc.data().userId !== req.user.userId) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const updateData = { updatedAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp() };
+    if (alias) {
+      // Check alias uniqueness
+      const existingSnap = await db.collection(SIGNATURE_COLLECTION)
+        .where('userId', '==', req.user.userId)
+        .where('type', '==', doc.data().type).get();
+      let aliasExists = false;
+      existingSnap.forEach(d => { if (d.id !== id && d.data().alias === alias) aliasExists = true; });
+      if (aliasExists) {
+        return res.status(400).json({ error: 'Alias must be unique' });
+      }
+      updateData.alias = alias;
+    }
+    if (req.file) {
+      if (req.file.size > MAX_IMAGE_SIZE) {
+        return res.status(400).json({ error: 'Image too large (max 20MB)' });
+      }
+      const ext = path.extname(req.file.originalname).toLowerCase();
+      if (!['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) {
+        return res.status(400).json({ error: 'Invalid image type' });
+      }
+      const fileName = `user_signatures/${req.user.userId}/${Date.now()}_${alias || doc.data().alias}${ext}`;
+      await bucket.file(fileName).save(req.file.buffer, { contentType: req.file.mimetype });
+      updateData.imageUrl = isLocalMode
+        ? `/uploads/${fileName}`
+        : `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+    } else if (req.body.imageDataUrl) {
+      const matches = req.body.imageDataUrl.match(/^data:(image\/\w+);base64,(.+)$/);
+      if (!matches) return res.status(400).json({ error: 'Invalid image data' });
+      const buffer = Buffer.from(matches[2], 'base64');
+      if (buffer.length > MAX_IMAGE_SIZE) {
+        return res.status(400).json({ error: 'Image too large (max 20MB)' });
+      }
+      const ext = matches[1].split('/')[1];
+      const fileName = `user_signatures/${req.user.userId}/${Date.now()}_${alias || doc.data().alias}.${ext}`;
+      await bucket.file(fileName).save(buffer, { contentType: matches[1] });
+      updateData.imageUrl = isLocalMode
+        ? `/uploads/${fileName}`
+        : `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+    }
+    await docRef.update(updateData);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to update signature' });
+  }
+});
+
+// Delete signature/stamp
+app.delete('/api/user/signatures/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const docRef = db.collection(SIGNATURE_COLLECTION).doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists || doc.data().userId !== req.user.userId) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    // Optionally: delete image from storage
+    await docRef.delete();
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to delete signature' });
+  }
+});
+// --- END Signature & Stamp Management API ---
