@@ -1336,6 +1336,12 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
     const { documentId } = req.params;
     const { signerEmail, signatureData, fieldValues } = req.body;
 
+    console.log('=== SUBMIT SIGNATURE DEBUG ===');
+    console.log('Document ID:', documentId);
+    console.log('Signer Email:', signerEmail);
+    console.log('Has signature data:', !!signatureData);
+    console.log('Has field values:', !!fieldValues);
+
     const docRef = db.collection('documents').doc(documentId);
     const doc = await docRef.get();
 
@@ -1361,6 +1367,8 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
 
     // Check if all signers have signed
     const allSigned = updatedSigners.every(signer => signer.signed);
+    console.log('All signers signed:', allSigned);
+    console.log('Signers status:', updatedSigners.map(s => ({ email: s.email, signed: s.signed })));
 
     const updateData = {
       signers: updatedSigners,
@@ -1373,6 +1381,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
     }
 
     await docRef.update(updateData);
+    console.log('✅ Document updated with new status:', updateData.status);
 
     // Send completion email if all signers have signed
     if (allSigned) {
@@ -1403,7 +1412,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
           recipientName: ownerData?.name || documentData.createdBy?.name || 'Document Owner',
           documentTitle: documentTitle,
           signers: signersList,
-          downloadUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard`
+          downloadUrl: `${process.env.FRONTEND_URL || 'http://localhost:3002'}/sign-complete?document=${documentId}`
         };
 
         console.log(`📧 Sending completed PDF to document owner: ${ownerEmailData.recipientEmail}`);
@@ -1416,7 +1425,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
             recipientName: signer.name || signer.email.split('@')[0],
             documentTitle: documentTitle,
             signers: signersList,
-            downloadUrl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard`
+            downloadUrl: `${process.env.FRONTEND_URL || 'http://localhost:3002'}/sign-complete?document=${documentId}&signer=${encodeURIComponent(signer.email)}`
           };
 
           console.log(`📧 Sending completed PDF to signer: ${signer.email}`);
@@ -1442,7 +1451,9 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
     res.json({ 
       success: true, 
       message: 'Signature submitted successfully',
-      allSigned: allSigned
+      allSigned: allSigned,
+      documentStatus: updateData.status,
+      downloadUrl: allSigned ? `${process.env.FRONTEND_URL || 'http://localhost:3002'}/sign-complete?document=${documentId}` : null
     });
   } catch (error) {
     console.error('Submit signature error:', error);

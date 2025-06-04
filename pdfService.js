@@ -221,8 +221,8 @@ class PDFService {
                 
                 console.log(`☑️ Adding checkbox (checked)`);
                 
-                // Draw check mark
-                page.drawText('✓', {
+                // Draw check mark (use 'X' instead of '✓' for WinAnsi compatibility)
+                page.drawText('X', {
                   x: checkX,
                   y: checkY,
                   size: checkSize,
