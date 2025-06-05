@@ -1434,11 +1434,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
         await Promise.all(signerEmailPromises);
         console.log(`✅ Successfully sent completed PDFs to ${updatedSigners.length + 1} recipients`);
         
-        // Clean up temporary file
-        setTimeout(() => {
-          pdfService.cleanupTempFile(completedPDF.tempFilePath);
-        }, 60000); // Clean up after 1 minute to allow email sending
-        
+        // No need to clean up temporary files anymore since we're using memory buffers
       } catch (emailError) {
         console.error('PDF generation and email sending error:', emailError);
         console.error('PDF error stack:', emailError.stack);

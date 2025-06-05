@@ -1,6 +1,4 @@
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
-const fs = require('fs').promises;
-const path = require('path');
 const axios = require('axios');
 
 class PDFService {
@@ -492,39 +490,6 @@ class PDFService {
     } catch (error) {
       console.error('❌ Merge documents with fields error:', error);
       throw new Error(`Failed to merge documents with fields: ${error.message}`);
-    }
-  }
-
-  /**
-   * Save PDF to temporary file and return path
-   */
-  async saveTempPDF(pdfBuffer, filename) {
-    try {
-      const tempDir = path.join(process.cwd(), 'temp');
-      await fs.mkdir(tempDir, { recursive: true });
-      
-      const sanitizedFilename = filename.replace(/[^a-zA-Z0-9.-]/g, '_');
-      const filePath = path.join(tempDir, `${Date.now()}_${sanitizedFilename}.pdf`);
-      
-      await fs.writeFile(filePath, pdfBuffer);
-      console.log(`💾 PDF saved to: ${filePath}`);
-      
-      return filePath;
-    } catch (error) {
-      console.error('❌ Save temp PDF error:', error);
-      throw new Error(`Failed to save PDF: ${error.message}`);
-    }
-  }
-
-  /**
-   * Clean up temporary file
-   */
-  async cleanupTempFile(filePath) {
-    try {
-      await fs.unlink(filePath);
-      console.log(`🗑️ Cleaned up temp file: ${filePath}`);
-    } catch (error) {
-      console.warn(`⚠️ Failed to cleanup temp file: ${filePath}`, error.message);
     }
   }
 
