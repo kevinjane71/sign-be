@@ -2133,12 +2133,12 @@ app.post('/auth/:provider', async (req, res) => {
           const oauth2Client = new google.auth.OAuth2(
             '606105812193-7ldf8ofiset6impsavns11ib7nd71mfn.apps.googleusercontent.com',
             googleClientSecret,
-            `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`
+            `${process.env.FRONTEND_URL_WEB}/login`
           );
 
           const { tokens } = await oauth2Client.getToken({
             code: code,
-            redirect_uri: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/login`,
+            redirect_uri: `${process.env.FRONTEND_URL_WEB}/login`,
             scope: GOOGLE_SCOPES.join(' ')
           });
 
