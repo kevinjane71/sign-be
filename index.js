@@ -1148,7 +1148,7 @@ app.post('/api/documents/:documentId/send', authenticateToken, verifyDocumentOwn
         // Generate secure signing token for this signer
         const signingToken = generateSigningToken(documentId, signer.email);
         
-        const signingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}&token=${signingToken}`;
+        const signingUrl = `${process.env.FRONTEND_URL_WEB}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}&token=${signingToken}`;
         
         console.log('  Generated signing URL:', signingUrl);
         
@@ -1411,7 +1411,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
           recipientName: ownerData?.name || documentData.createdBy?.name || 'Document Owner',
           documentTitle: documentTitle,
           signers: signersList,
-          downloadUrl: `https://esigntap.com/api/documents/${documentId}/download`
+          downloadUrl: `${process.env.FRONTEND_URL_WEB}/api/documents/${documentId}/download`
         };
 
         console.log(`📧 Sending completed PDF to document owner: ${ownerEmailData.recipientEmail}`);
@@ -1424,7 +1424,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
             recipientName: signer.name || signer.email.split('@')[0],
             documentTitle: documentTitle,
             signers: signersList,
-            downloadUrl: `https://esigntap.com/api/documents/${documentId}/download`
+            downloadUrl: `${process.env.FRONTEND_URL_WEB}/api/documents/${documentId}/download`
           };
 
           console.log(`📧 Sending completed PDF to signer: ${signer.email}`);
@@ -1448,7 +1448,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
       message: 'Signature submitted successfully',
       allSigned: allSigned,
       documentStatus: updateData.status,
-      downloadUrl: allSigned ? `https://esigntap.com/api/documents/${documentId}/download` : null
+      downloadUrl: allSigned ? `${process.env.FRONTEND_URL_WEB}/api/documents/${documentId}/download` : null
     });
   } catch (error) {
     console.error('Submit signature error:', error);
@@ -1776,7 +1776,7 @@ app.post('/api/documents/:documentId/send-workflow', async (req, res) => {
     // Log email details (email sending is disabled)
     console.log('📧 Email sending temporarily disabled - would send to signers:');
     signersToNotify.forEach(signer => {
-      const signingUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}`;
+      const signingUrl = `${process.env.FRONTEND_URL_WEB}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}`;
       console.log(`   📩 ${signer.name} (${signer.email}) - Role: ${signer.role}: ${signingUrl}`);
     });
 
@@ -2849,7 +2849,7 @@ app.get('/api/documents/:documentId/status', async (req, res) => {
     const signers = documentData.signers || [];
     const allSigned = signers.length > 0 && signers.every(s => s.signed);
     const downloadUrl = documentData.status === 'completed'
-      ? `${process.env.FRONTEND_URL || 'http://localhost:3002'}/api/documents/${documentId}/download`
+      ? `${process.env.FRONTEND_URL_WEB}/api/documents/${documentId}/download`
       : null;
 
     res.json({ 
