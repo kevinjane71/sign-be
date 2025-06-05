@@ -547,13 +547,10 @@ class PDFService {
       // Generate merged PDF with all signatures
       const completedPDFBuffer = await this.mergeDocumentsWithFields(documentData, signedSigners);
       
-      // Save to temporary file
       const documentTitle = documentData.title || documentData.originalName || 'completed-document';
-      const tempFilePath = await this.saveTempPDF(completedPDFBuffer, `${documentTitle}-signed`);
       
       return {
         buffer: completedPDFBuffer,
-        tempFilePath: tempFilePath,
         filename: `${documentTitle}-signed.pdf`
       };
     } catch (error) {

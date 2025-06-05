@@ -1398,7 +1398,6 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
         const completedPDF = await pdfService.generateCompletedDocument(documentData, updatedSigners);
         
         console.log(`✅ PDF generated: ${completedPDF.filename}`);
-        console.log(`📁 Temp file saved at: ${completedPDF.tempFilePath}`);
         
         // Prepare common email data
         const signersList = updatedSigners.filter(s => s.signed).map(s => ({
@@ -1412,11 +1411,11 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
           recipientName: ownerData?.name || documentData.createdBy?.name || 'Document Owner',
           documentTitle: documentTitle,
           signers: signersList,
-          downloadUrl: `${process.env.FRONTEND_URL || 'http://localhost:3002'}/api/documents/${documentId}/download`
+          downloadUrl: `https://esigntap.com/api/documents/${documentId}/download`
         };
 
         console.log(`📧 Sending completed PDF to document owner: ${ownerEmailData.recipientEmail}`);
-        await emailService.sendDocumentCompletedEmailWithPDF(ownerEmailData, completedPDF.tempFilePath);
+        await emailService.sendDocumentCompletedEmailWithPDF(ownerEmailData, completedPDF.buffer);
 
         // Send PDF to all signers
         const signerEmailPromises = updatedSigners.filter(s => s.signed).map(async (signer) => {
@@ -1425,11 +1424,11 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
             recipientName: signer.name || signer.email.split('@')[0],
             documentTitle: documentTitle,
             signers: signersList,
-            downloadUrl: `${process.env.FRONTEND_URL || 'http://localhost:3002'}/api/documents/${documentId}/download`
+            downloadUrl: `https://esigntap.com/api/documents/${documentId}/download`
           };
 
           console.log(`📧 Sending completed PDF to signer: ${signer.email}`);
-          return emailService.sendDocumentCompletedEmailWithPDF(signerEmailData, completedPDF.tempFilePath);
+          return emailService.sendDocumentCompletedEmailWithPDF(signerEmailData, completedPDF.buffer);
         });
 
         await Promise.all(signerEmailPromises);
@@ -1453,7 +1452,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
       message: 'Signature submitted successfully',
       allSigned: allSigned,
       documentStatus: updateData.status,
-      downloadUrl: allSigned ? `${process.env.FRONTEND_URL || 'http://localhost:3002'}/api/documents/${documentId}/download` : null
+      downloadUrl: allSigned ? `https://esigntap.com/api/documents/${documentId}/download` : null
     });
   } catch (error) {
     console.error('Submit signature error:', error);
@@ -2906,13 +2905,6 @@ app.get('/api/documents/:documentId/download', async (req, res) => {
 
     // Send the PDF buffer
     res.send(completedDoc.buffer);
-
-    // Clean up temp file
-    if (completedDoc.tempFilePath) {
-      setTimeout(() => {
-        pdfService.cleanupTempFile(completedDoc.tempFilePath);
-      }, 1000);
-    }
 
   } catch (error) {
     console.error('Download document error:', error);

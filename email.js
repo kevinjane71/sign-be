@@ -147,9 +147,9 @@ SignFlow Team`,
     <div style="background-color: #F3F4F6; padding: 24px; text-align: center; border-top: 1px solid #E5E7EB;">
       <p style="color: #6B7280; margin: 0; font-size: 14px;">© ${new Date().getFullYear()} SignFlow. Professional Document Signing.</p>
       <div style="margin-top: 16px;">
-        <a href="#" style="color: #4F46E5; text-decoration: none; margin: 0 8px; font-size: 14px;">Help Center</a>
-        <a href="#" style="color: #4F46E5; text-decoration: none; margin: 0 8px; font-size: 14px;">Privacy Policy</a>
-        <a href="#" style="color: #4F46E5; text-decoration: none; margin: 0 8px; font-size: 14px;">Security</a>
+        <a href="https://esigntap.com/help" style="color: #4F46E5; text-decoration: none; margin: 0 8px; font-size: 14px;">Help Center</a>
+        <a href="https://esigntap.com/privacy" style="color: #4F46E5; text-decoration: none; margin: 0 8px; font-size: 14px;">Privacy Policy</a>
+        <a href="https://esigntap.com/security" style="color: #4F46E5; text-decoration: none; margin: 0 8px; font-size: 14px;">Security</a>
       </div>
     </div>
   </div>
@@ -260,9 +260,9 @@ eSignTap Team`,
     <div style="background-color: #F3F4F6; padding: 24px; text-align: center; border-top: 1px solid #E5E7EB;">
       <p style="color: #6B7280; margin: 0; font-size: 14px;">© ${new Date().getFullYear()} eSingTap. Professional Document Signing.</p>
       <div style="margin-top: 16px;">
-        <a href="#" style="color: #10B981; text-decoration: none; margin: 0 8px; font-size: 14px;">Dashboard</a>
-        <a href="#" style="color: #10B981; text-decoration: none; margin: 0 8px; font-size: 14px;">Help Center</a>
-        <a href="#" style="color: #10B981; text-decoration: none; margin: 0 8px; font-size: 14px;">Support</a>
+        <a href="https://esigntap.com/dashboard" style="color: #10B981; text-decoration: none; margin: 0 8px; font-size: 14px;">Dashboard</a>
+        <a href="https://esigntap.com/help" style="color: #10B981; text-decoration: none; margin: 0 8px; font-size: 14px;">Help Center</a>
+        <a href="https://esigntap.com/support" style="color: #10B981; text-decoration: none; margin: 0 8px; font-size: 14px;">Support</a>
       </div>
     </div>
   </div>
@@ -574,12 +574,12 @@ The MeetSynk Team`,
     });
   }
 
-  async sendDocumentCompletedEmailWithPDF(documentData, pdfFilePath) {
+  async sendDocumentCompletedEmailWithPDF(documentData, pdfBuffer) {
     console.log('=== EMAIL SERVICE PDF ATTACHMENT DEBUG ===');
     console.log('📧 sendDocumentCompletedEmailWithPDF called with:', {
       recipientEmail: documentData.recipientEmail,
       documentTitle: documentData.documentTitle,
-      pdfPath: pdfFilePath
+      hasPdfBuffer: !!pdfBuffer
     });
     
     if (!documentData.recipientEmail || !documentData.recipientName || !documentData.documentTitle) {
@@ -602,13 +602,13 @@ The MeetSynk Team`,
     };
 
     const attachments = [];
-    if (pdfFilePath) {
+    if (pdfBuffer) {
       attachments.push({
         filename: `${documentData.documentTitle}-signed.pdf`,
-        path: pdfFilePath,
+        content: pdfBuffer,
         contentType: 'application/pdf'
       });
-      console.log('📎 PDF attachment added:', pdfFilePath);
+      console.log('📎 PDF attachment added from buffer');
     }
 
     console.log('📋 Processed email data:', JSON.stringify(emailData, null, 2));
