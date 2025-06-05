@@ -2121,11 +2121,11 @@ app.post('/auth/:provider', async (req, res) => {
 
         // Check if Google OAuth is properly configured
         const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
-        if (!googleClientSecret || googleClientSecret === 'your-actual-google-client-secret-here' || googleClientSecret === 'your-google-client-secret') {
+        if (!googleClientSecret) {
           return res.status(500).json({
             success: false,
             error: 'Google OAuth not configured',
-            details: 'GOOGLE_CLIENT_SECRET environment variable is not set or is using placeholder value. Please configure Google OAuth in Google Cloud Console.'
+            details: 'GOOGLE_CLIENT_SECRET environment variable is not set. Please configure Google OAuth in Google Cloud Console.'
           });
         }
 
