@@ -1251,9 +1251,24 @@ app.get('/api/sign/:documentId', async (req, res) => {
 
     // Find the current signer's userId from the signers array
     let currentSignerId = null;
+    let signerInfo = null;
     if (Array.isArray(documentData.signers)) {
       const found = documentData.signers.find(s => s.email === signer);
-      if (found) currentSignerId = found.id || found.userId || null;
+      if (found) {
+        currentSignerId = found.id || found.userId || null;
+        signerInfo = found;
+      }
+    }
+
+    // --- Access Code Check ---
+    if (signerInfo && signerInfo.accessCode) {
+      const providedCode = req.query.accessCode || '';
+      if (!providedCode) {
+        return res.status(401).json({ error: 'Access code required', accessCodeRequired: true });
+      }
+      if (providedCode !== signerInfo.accessCode) {
+        return res.status(403).json({ error: 'Invalid access code', accessCodeRequired: true });
+      }
     }
 
     // Filter fields for this signer using assignedSigner (userId)
@@ -1273,7 +1288,6 @@ app.get('/api/sign/:documentId', async (req, res) => {
     }
 
     // Check if this signer has already signed
-    const signerInfo = documentData.signers?.find(s => s.email === signer);
     if (signerInfo && signerInfo.signed) {
       console.log('✅ Signer has already signed - redirecting to completed view');
       return res.json({ 
