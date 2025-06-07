@@ -1304,7 +1304,8 @@ app.get('/api/sign/:documentId', async (req, res) => {
         signer: {
           email: signer,
           signedAt: signerInfo.signedAt,
-          alreadySigned: true
+          alreadySigned: true,
+          role: signerInfo?.role?.toLowerCase() || 'signer' // Convert role to lowercase
         }
       });
     }
@@ -1335,7 +1336,8 @@ app.get('/api/sign/:documentId', async (req, res) => {
         name: signer.split('@')[0],
         hasAccess: true,
         tokenValid: true,
-        alreadySigned: false
+        alreadySigned: false,
+        role: signerInfo?.role?.toLowerCase() || 'signer' // Convert role to lowercase
       }
     });
   } catch (error) {
@@ -1365,6 +1367,12 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
 
     const documentData = doc.data();
     
+    // Find the current signer
+    const currentSigner = documentData.signers.find(s => s.email === signerEmail)
+    if (currentSigner && currentSigner.role && currentSigner.role.toLowerCase() === 'viewer') {
+      return res.status(403).json({ error: 'Viewers are not allowed to sign this document.' });
+    }
+
     // Find and update signer
     const updatedSigners = documentData.signers.map(signer => {
       if (signer.email === signerEmail) {
