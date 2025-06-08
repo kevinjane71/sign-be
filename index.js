@@ -1373,105 +1373,108 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
       return res.status(403).json({ error: 'Viewers are not allowed to sign this document.' });
     }
 
-    // Find and update signer
-    const updatedSigners = documentData.signers.map(signer => {
-      if (signer.email === signerEmail) {
-        return {
-          ...signer,
-          signed: true,
-          signedAt: new Date().toISOString(),
-          signatureData: signatureData,
-          fieldValues: fieldValues
-        };
-      }
-      return signer;
-    });
+    // Respond to the client immediately after basic checks
+    res.json({ success: true, message: 'Signature received. Processing in background.' });
 
-    // Check if all signers have signed
-    const allSigned = updatedSigners.every(signer => signer.signed);
-    console.log('All signers signed:', allSigned);
-    console.log('Signers status:', updatedSigners.map(s => ({ email: s.email, signed: s.signed })));
-
-    const updateData = {
-      signers: updatedSigners,
-      status: allSigned ? 'completed' : 'partially_signed',
-      updatedAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
-    };
-
-    if (allSigned) {
-      updateData.completedAt = isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp();
-    }
-
-    await docRef.update(updateData);
-    console.log('✅ Document updated with new status:', updateData.status);
-
-    // Send completion email if all signers have signed
-    if (allSigned) {
+    // Continue processing in the background
+    setImmediate(async () => {
       try {
-        console.log('🎯 All signers have completed - generating PDF and sending notifications...');
-        
-        // Get document owner information
-        const ownerDoc = await db.collection('users').doc(documentData.userId).get();
-        const ownerData = ownerDoc.exists ? ownerDoc.data() : null;
-        const documentTitle = documentData.title || documentData.originalName || 'Document';
-        
-        // Generate completed PDF with all signatures
-        console.log('📄 Generating completed PDF document...');
-        const completedPDF = await pdfService.generateCompletedDocument(documentData, updatedSigners);
-        
-        console.log(`✅ PDF generated: ${completedPDF.filename}`);
-        
-        // Prepare common email data
-        const signersList = updatedSigners.filter(s => s.signed).map(s => ({
-          name: s.name || s.email.split('@')[0],
-          email: s.email
-        }));
-        
-        // Send PDF to document owner
-        const ownerEmailData = {
-          recipientEmail: ownerData?.email || documentData.createdBy?.email,
-          recipientName: ownerData?.name || documentData.createdBy?.name || 'Document Owner',
-          documentTitle: documentTitle,
-          signers: signersList,
-          downloadUrl: `${process.env.FRONTEND_URL_WEB}/api/documents/${documentId}/download`
-        };
-
-        console.log(`📧 Sending completed PDF to document owner: ${ownerEmailData.recipientEmail}`);
-        await emailService.sendDocumentCompletedEmailWithPDF(ownerEmailData, completedPDF.buffer);
-
-        // Send PDF to all signers
-        const signerEmailPromises = updatedSigners.filter(s => s.signed).map(async (signer) => {
-          const signerEmailData = {
-            recipientEmail: signer.email,
-            recipientName: signer.name || signer.email.split('@')[0],
-            documentTitle: documentTitle,
-            signers: signersList,
-            downloadUrl: `${process.env.FRONTEND_URL_WEB}/api/documents/${documentId}/download`
-          };
-
-          console.log(`📧 Sending completed PDF to signer: ${signer.email}`);
-          return emailService.sendDocumentCompletedEmailWithPDF(signerEmailData, completedPDF.buffer);
+        // Find and update signer
+        const updatedSigners = documentData.signers.map(signer => {
+          if (signer.email === signerEmail) {
+            return {
+              ...signer,
+              signed: true,
+              signedAt: new Date().toISOString(),
+              signatureData: signatureData,
+              fieldValues: fieldValues
+            };
+          }
+          return signer;
         });
 
-        await Promise.all(signerEmailPromises);
-        console.log(`✅ Successfully sent completed PDFs to ${updatedSigners.length + 1} recipients`);
-        
-        // No need to clean up temporary files anymore since we're using memory buffers
-      } catch (emailError) {
-        console.error('PDF generation and email sending error:', emailError);
-        console.error('PDF error stack:', emailError.stack);
-        // Don't fail the request if PDF/email fails - just log it
-        console.log('⚠️ Document completed successfully but PDF generation/email notifications failed');
-      }
-    }
+        // Check if all signers have signed
+        const allSigned = updatedSigners.every(signer => signer.signed);
+        console.log('All signers signed:', allSigned);
+        console.log('Signers status:', updatedSigners.map(s => ({ email: s.email, signed: s.signed })));
 
-    res.json({ 
-      success: true, 
-      message: 'Signature submitted successfully',
-      allSigned: allSigned,
-      documentStatus: updateData.status,
-      downloadUrl: allSigned ? `${process.env.FRONTEND_URL_WEB}/api/documents/${documentId}/download` : null
+        const updateData = {
+          signers: updatedSigners,
+          status: allSigned ? 'completed' : 'partially_signed',
+          updatedAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
+        };
+
+        if (allSigned) {
+          updateData.completedAt = isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp();
+        }
+
+        await docRef.update(updateData);
+        console.log('✅ Document updated with new status:', updateData.status);
+
+        // Send completion email if all signers have signed
+        if (allSigned) {
+          try {
+            console.log('🎯 All signers have completed - generating PDF and sending notifications...');
+            
+            // Get document owner information
+            const ownerDoc = await db.collection('users').doc(documentData.userId).get();
+            const ownerData = ownerDoc.exists ? ownerDoc.data() : null;
+            const documentTitle = documentData.title || documentData.originalName || 'Document';
+            
+            // Generate completed PDF with all signatures
+            console.log('📄 Generating completed PDF document...');
+            const completedPDF = await pdfService.generateCompletedDocument(documentData, updatedSigners);
+            
+            console.log(`✅ PDF generated: ${completedPDF.filename}`);
+            
+            // Prepare common email data
+            const signersList = updatedSigners.filter(s => s.signed).map(s => ({
+              name: s.name || s.email.split('@')[0],
+              email: s.email
+            }));
+            
+            // Send PDF to document owner
+            const ownerEmailData = {
+              recipientEmail: ownerData?.email || documentData.createdBy?.email,
+              recipientName: ownerData?.name || documentData.createdBy?.name || 'Document Owner',
+              documentTitle: documentTitle,
+              signers: signersList,
+              downloadUrl: `${process.env.FRONTEND_URL_WEB}/api/documents/${documentId}/download`
+            };
+
+            console.log(`📧 Sending completed PDF to document owner: ${ownerEmailData.recipientEmail}`);
+            await emailService.sendDocumentCompletedEmailWithPDF(ownerEmailData, completedPDF.buffer);
+
+            // Send PDF to all signers
+            const signerEmailPromises = updatedSigners.filter(s => s.signed).map(async (signer) => {
+              const signerEmailData = {
+                recipientEmail: signer.email,
+                recipientName: signer.name || signer.email.split('@')[0],
+                documentTitle: documentTitle,
+                signers: signersList,
+                downloadUrl: `${process.env.FRONTEND_URL_WEB}/api/documents/${documentId}/download`
+              };
+
+              console.log(`📧 Sending completed PDF to signer: ${signer.email}`);
+              return emailService.sendDocumentCompletedEmailWithPDF(signerEmailData, completedPDF.buffer);
+            });
+
+            await Promise.all(signerEmailPromises);
+            console.log(`✅ Successfully sent completed PDFs to ${updatedSigners.length + 1} recipients`);
+            
+            // No need to clean up temporary files anymore since we're using memory buffers
+          } catch (emailError) {
+            console.error('PDF generation and email sending error:', emailError);
+            console.error('PDF error stack:', emailError.stack);
+            // Don't fail the request if PDF/email fails - just log it
+            console.log('⚠️ Document completed successfully but PDF generation/email notifications failed');
+          }
+        }
+      } catch (backgroundError) {
+        console.error('Background processing error in /api/sign/:documentId/submit:', backgroundError);
+      }
     });
+
   } catch (error) {
     console.error('Submit signature error:', error);
     res.status(500).json({ error: 'Internal server error' });
