@@ -479,8 +479,8 @@ class PDFService {
       // Add metadata
       mergedPDF.setTitle(documentData.title || documentData.originalName || 'Signed Document');
       mergedPDF.setSubject('Digitally Signed Document');
-      mergedPDF.setCreator('SignFlow');
-      mergedPDF.setProducer('SignFlow PDF Service');
+      mergedPDF.setCreator('eSignTap');
+      mergedPDF.setProducer('eSignTap PDF Service');
       mergedPDF.setCreationDate(new Date());
       mergedPDF.setModificationDate(new Date());
 

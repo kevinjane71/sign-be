@@ -25,21 +25,21 @@ async function sendTestEmail(email, password, testEmailAddress = 'malik.vk07@gma
     // Simple email HTML similar to your working example
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2>SignFlow Email Test</h2>
+        <h2>eSignTap Email Test</h2>
         <p>Hello,</p>
-        <p>This is a test email to verify SignFlow email configuration is working.</p>
+        <p>This is a test email to verify eSignTap email configuration is working.</p>
         <h1 style="font-size: 32px; letter-spacing: 5px; text-align: center; padding: 20px; background-color: #f5f5f5; border-radius: 5px;">✅ SUCCESS</h1>
         <p>If you receive this email, the email service is working correctly!</p>
         <p>Email sent at: ${new Date().toLocaleString()}</p>
-        <p>Best regards,<br>SignFlow Team</p>
+        <p>Best regards,<br>eSignTap Team</p>
       </div>
     `;
 
     const mailOptions = {
       from: email,
       to: testEmailAddress,
-      subject: '✅ SignFlow Email Test - Configuration Check',
-      text: `SignFlow email test sent at ${new Date().toLocaleString()}. If you received this, the email service is working!`,
+      subject: '✅ eSignTap Email Test - Configuration Check',
+      text: `eSignTap email test sent at ${new Date().toLocaleString()}. If you received this, the email service is working!`,
       html: emailHtml
     };
 
@@ -66,7 +66,7 @@ if (require.main === module) {
   
   if (args.length < 2) {
     console.log('Usage: node simple-email-test.js <email> <password> [test-email-address]');
-    console.log('Example: node simple-email-test.js admin@signflow.com mypassword malik.vk07@gmail.com');
+    console.log('Example: node simple-email-test.js info@eSignTap.com mypassword');
     process.exit(1);
   }
   

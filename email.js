@@ -33,7 +33,7 @@ class EmailService {
     this.templates = {
       // Document Signing Templates
       documentShare: {
-        getSubject: (documentTitle) => `🔔 Action Required: Sign "${documentTitle}" - SignFlow`,
+        getSubject: (documentTitle) => `🔔 Action Required: Sign "${documentTitle}" - eSignTap`,
         
         text: (documentData) => `
 Dear ${documentData.signerName},
@@ -50,7 +50,7 @@ ${documentData.signingUrl}
 This signature request will expire in 30 days.
 
 Best regards,
-SignFlow Team`,
+eSignTap Team`,
 
         html: (documentData) => `
 <!DOCTYPE html>
@@ -145,7 +145,7 @@ SignFlow Team`,
 
     <!-- Footer -->
     <div style="background-color: #F3F4F6; padding: 24px; text-align: center; border-top: 1px solid #E5E7EB;">
-      <p style="color: #6B7280; margin: 0; font-size: 14px;">© ${new Date().getFullYear()} SignFlow. Professional Document Signing.</p>
+      <p style="color: #6B7280; margin: 0; font-size: 14px;">© ${new Date().getFullYear()} eSignTap. Professional Document Signing.</p>
       <div style="margin-top: 16px;">
         <a href="https://esigntap.com/help" style="color: #4F46E5; text-decoration: none; margin: 0 8px; font-size: 14px;">Help Center</a>
         <a href="https://esigntap.com/privacy" style="color: #4F46E5; text-decoration: none; margin: 0 8px; font-size: 14px;">Privacy Policy</a>
@@ -173,7 +173,7 @@ Document Details:
 You can download the completed document using the link below:
 ${documentData.downloadUrl}
 
-Thank you for using SignFlow.
+Thank you for using eSignTap.
 
 Best regards,
 eSignTap Team`,
@@ -185,7 +185,6 @@ eSignTap Team`,
   <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);">
     <!-- Header -->
     <div style="background: linear-gradient(135deg, #10B981 0%, #059669 100%); padding: 40px 20px; text-align: center;">
-      <div style="font-size: 50px; margin-bottom: 15px;">✅🎉</div>
       <h1 style="color: #ffffff; margin: 0; font-size: 28px; letter-spacing: 0.5px;">Document Completed!</h1>
       <p style="color: #D1FAE5; margin-top: 10px; font-size: 16px;">
         All signatures have been collected successfully
@@ -292,15 +291,15 @@ Meeting Details:
 - Notes: ${meetingData?.notes || 'No additional notes'}
 
 Manage your meeting:
-Reschedule: https://www.meetsynk.com/${meetingData?.eventSlug}?rescheduleId=${meetingData?.eventId}
-Cancel: https://www.meetsynk.com/${meetingData?.eventSlug}?rescheduleId=${meetingData?.eventId}
+Reschedule: https://www.eSignTap.com/${meetingData?.eventSlug}?rescheduleId=${meetingData?.eventId}
+Cancel: https://www.eSignTap.com/${meetingData?.eventSlug}?rescheduleId=${meetingData?.eventId}
 
 ${meetingData.isReschedule 
   ? 'The previous meeting has been canceled. You will receive a new calendar invitation shortly.'
   : 'The meeting has been added to your calendar. You will receive a calendar invitation separately.'}
 
 Best regards,
-The MeetSynk Team`,
+The E-SignTap Team`,
 
         html: (meetingData) => `
 <!DOCTYPE html>
@@ -372,11 +371,11 @@ The MeetSynk Team`,
 
       <!-- Action Buttons -->
       <div style="text-align: center; margin: 32px 0;">
-        <a href="https://www.meetsynk.com/${meetingData?.eventSlug}?rescheduleId=${meetingData?.eventId}" 
+        <a href="https://www.eSignTap.com/${meetingData?.eventSlug}?rescheduleId=${meetingData?.eventId}" 
            style="display: inline-block; background: #4F46E5; color: white; padding: 14px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; margin: 8px;">
           Reschedule Meeting
         </a>
-        <a href="https://www.meetsynk.com/${meetingData?.eventSlug}?rescheduleId=${meetingData?.eventId}" 
+        <a href="https://www.eSignTap.com/${meetingData?.eventSlug}?rescheduleId=${meetingData?.eventId}" 
            style="display: inline-block; background: #DC2626; color: white; padding: 14px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; margin: 8px;">
           Cancel Meeting
         </a>
@@ -391,7 +390,7 @@ The MeetSynk Team`,
 
     <!-- Footer -->
     <div style="background-color: #F3F4F6; padding: 24px; text-align: center; border-top: 1px solid #E5E7EB;">
-      <p style="color: #6B7280; margin: 0; font-size: 14px;">© 2024 MeetSynk. All rights reserved.</p>
+      <p style="color: #6B7280; margin: 0; font-size: 14px;">© 2024 eSignTap. All rights reserved.</p>
       <div style="margin-top: 16px;">
         <a href="#" style="color: #4F46E5; text-decoration: none; margin: 0 8px; font-size: 14px;">Help Center</a>
         <a href="#" style="color: #4F46E5; text-decoration: none; margin: 0 8px; font-size: 14px;">Privacy Policy</a>
@@ -404,11 +403,11 @@ The MeetSynk Team`,
       },
 
       welcome: {
-        subject: 'Welcome to MeetSynk - Your AI-Powered Meeting Scheduler',
+        subject: 'Welcome to eSignTap - Your AI-Powered Meeting Scheduler',
         text: (userData) => `
 Dear ${userData.name},
 
-Welcome to MeetSynk! You've just unlocked a smarter way to schedule meetings.
+Welcome to eSignTap! You've just unlocked a smarter way to schedule meetings.
 
 Key Features:
 - AI-Powered Scheduling: Intelligent time suggestions based on your preferences
@@ -421,7 +420,7 @@ Key Features:
 Start scheduling your first meeting now!
 
 Best regards,
-The MeetSynk Team`,
+The eSignTap Team`,
 
         html: (userData) => `
 <!DOCTYPE html>
@@ -430,7 +429,7 @@ The MeetSynk Team`,
   <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
     <!-- Header -->
     <div style="background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); padding: 40px 20px; text-align: center;">
-      <h1 style="color: #ffffff; margin: 0; font-size: 28px;">Welcome to MeetSynk</h1>
+      <h1 style="color: #ffffff; margin: 0; font-size: 28px;">Welcome to eSignTap</h1>
       <p style="color: #E0E7FF; margin-top: 10px; font-size: 16px;">Your AI-Powered Meeting Assistant</p>
     </div>
 
@@ -439,7 +438,7 @@ The MeetSynk Team`,
       <p style="font-size: 16px; color: #4B5563;">Dear ${userData?.name},</p>
       
       <p style="font-size: 16px; color: #4B5563; margin-bottom: 24px;">
-        You've just unlocked a smarter way to schedule meetings. Here's what makes MeetSynk special:
+        You've just unlocked a smarter way to schedule meetings. Here's what makes eSignTap special:
       </p>
 
       <!-- Feature Grid -->
@@ -465,13 +464,13 @@ The MeetSynk Team`,
 
       <!-- CTA Button -->
       <div style="text-align: center; margin: 32px 0;">
-        <a href="https://www.meetsynk.com" target="_blank" style="display: inline-block; background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">Schedule Your First Meeting</a>
+        <a href="https://www.eSignTap.com" target="_blank" style="display: inline-block; background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">Schedule Your First Meeting</a>
       </div>
     </div>
 
     <!-- Footer -->
     <div style="background-color: #F3F4F6; padding: 24px; text-align: center; border-top: 1px solid #E5E7EB;">
-      <p style="color: #6B7280; margin: 0; font-size: 14px;">© 2024 MeetSynk. All rights reserved.</p>
+      <p style="color: #6B7280; margin: 0; font-size: 14px;">© 2024 eSignTap. All rights reserved.</p>
       <div style="margin-top: 16px;">
         <a href="#" style="color: #4F46E5; text-decoration: none; margin: 0 8px; font-size: 14px;">Help Center</a>
         <a href="#" style="color: #4F46E5; text-decoration: none; margin: 0 8px; font-size: 14px;">Privacy Policy</a>
@@ -488,7 +487,7 @@ The MeetSynk Team`,
   async sendEmail({ to, subject, text, html, attachments = [] }) {
     try {
       const mailOptions = {
-        from: process.env.GODADY_EMAIL || "admin@meetsynk.com",
+        from: process.env.GODADY_EMAIL || "info@eSignTap.com",
         to,
         subject,
         text,
@@ -634,7 +633,7 @@ The MeetSynk Team`,
     }
   }
 
-  // Existing MeetSynk methods
+  // Existing eSignTap methods
   async sendWelcomeEmail(userData) {
     if (!userData.email || !userData.name) {
       throw new Error('Email and name are required for welcome email');

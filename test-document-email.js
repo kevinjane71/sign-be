@@ -9,7 +9,7 @@ async function testDocumentEmail() {
     const documentData = {
       signerEmail: 'malik.vk07@gmail.com',
       signerName: 'Malik Kumar',
-      documentTitle: 'Employment Contract - SignFlow Test',
+      documentTitle: 'Employment Contract - eSignTap Test',
       senderName: 'HR Department',
       senderEmail: 'hr@company.com',
       message: 'Please review and sign this employment contract. Your signature is required to complete the hiring process.',

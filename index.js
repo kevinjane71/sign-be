@@ -32,7 +32,12 @@ const upload = multer({
 
 // Setup CORS with more permissive options
 app.use(cors({
-  origin: '*',
+  origin: [
+    'http://localhost:3002',
+    'http://127.0.0.1:3002',
+    'https://esigntap.com'
+  ],
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -1130,7 +1135,7 @@ app.post('/api/documents/:documentId/send', authenticateToken, verifyDocumentOwn
       const senderDoc = await db.collection('users').doc(req.user.userId).get();
       const senderData = senderDoc.exists ? senderDoc.data() : null;
       const senderName = senderData?.name || req.user.email?.split('@')[0] || 'Document Sender';
-      const senderEmail = senderData?.email || req.user.email || 'noreply@signflow.com';
+      const senderEmail = senderData?.email || req.user.email || 'info@eSignTap.com';
 
       console.log('=== DOCUMENT SHARING EMAIL DEBUG ===');
       console.log('📧 Preparing to send emails to signers...');
@@ -1943,7 +1948,7 @@ app.delete('/api/documents/:documentId/signers/:signerId', async (req, res) => {
 
 // ==================== AUTHENTICATION ENDPOINTS ====================
 
-// Google OAuth scopes for SignFlow
+// Google OAuth scopes for eSignTap
 const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',  // Calendar events access
   'https://www.googleapis.com/auth/gmail.send',       // Gmail send access
@@ -2566,8 +2571,8 @@ app.post('/api/test-email', async (req, res) => {
       signerEmail: testEmail,
       signerName: 'Test User',
       documentTitle: 'Test Document - Email Configuration Check',
-      senderName: 'SignFlow System',
-      senderEmail: 'system@signflow.com',
+      senderName: 'eSignTap System',
+      senderEmail: 'info@eSignTap.com',
       message: 'This is a test email to verify email configuration is working properly.',
       signingUrl: 'https://example.com/test-signing-url'
     };
@@ -2594,8 +2599,8 @@ app.post('/api/test-email', async (req, res) => {
       
       const basicResult = await emailService.sendEmail({
         to: req.body.to || 'malik.vk07@gmail.com',
-        subject: '✉️ SignFlow Email Test - Basic',
-        text: `This is a basic test email from SignFlow.
+        subject: '✉️ eSignTap Email Test - Basic',
+        text: `This is a basic test email from eSignTap.
         
 Time: ${new Date().toLocaleString()}
 Testing email configuration...
@@ -2606,15 +2611,15 @@ Best regards,
 SingTap Team`,
         html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #4F46E5;">✉️ SignFlow Email Test</h2>
-          <p>This is a basic test email from SignFlow.</p>
+          <h2 style="color: #4F46E5;">✉️ eSignTap Email Test</h2>
+          <p>This is a basic test email from eSignTap.</p>
           <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
             <strong>Time:</strong> ${new Date().toLocaleString()}<br>
             <strong>Status:</strong> Testing email configuration...
           </div>
           <p>If you received this email, the basic email service is working.</p>
           <hr style="margin: 20px 0;">
-          <p style="color: #666; font-size: 14px;">Best regards,<br>SignFlow Team</p>
+          <p style="color: #666; font-size: 14px;">Best regards,<br>eSignTap Team</p>
         </div>`
       });
 
@@ -2987,17 +2992,17 @@ app.post('/auth/forgot-password', async (req, res) => {
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2 style="color: #4F46E5;">Password Reset Request</h2>
         <p>Hello ${userData.name || 'User'},</p>
-        <p>We received a request to reset your password for your SignFlow account. Here is your OTP:</p>
+        <p>We received a request to reset your password for your eSignTap account. Here is your OTP:</p>
         <h1 style="font-size: 32px; letter-spacing: 5px; text-align: center; padding: 20px; background-color: #f5f5f5; border-radius: 5px; color: #4F46E5;">${otp}</h1>
         <p>This OTP will expire in 6 hours.</p>
         <p>If you didn't request this password reset, please ignore this email.</p>
-        <p>Best regards,<br>SignFlow Team</p>
+        <p>Best regards,<br>eSignTap Team</p>
       </div>
     `;
 
     await emailService.sendEmail({
       to: email,
-      subject: 'Password Reset OTP - SignFlow',
+      subject: 'Password Reset OTP - eSignTap',
       text: `Your password reset OTP is: ${otp}. This OTP will expire in 6 hours.`,
       html: emailHtml
     });

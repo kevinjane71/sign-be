@@ -7,21 +7,21 @@ async function testEmail() {
     // Test 1: Basic email similar to your working example
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2>Test Email from SignFlow</h2>
+        <h2>Test Email from eSignTap</h2>
         <p>Hello,</p>
         <p>This is a test email to verify the email configuration is working properly.</p>
         <h1 style="font-size: 32px; letter-spacing: 5px; text-align: center; padding: 20px; background-color: #f5f5f5; border-radius: 5px;">TEST123</h1>
         <p>This is just a test to make sure emails are being sent correctly.</p>
         <p>If you received this email, the email service is working!</p>
-        <p>Best regards,<br>SignFlow Team</p>
+        <p>Best regards,<br>eSignTap Team</p>
       </div>
     `;
 
     console.log('📧 Sending basic test email...');
     const result1 = await emailService.sendEmail({
       to: 'malik.vk07@gmail.com',
-      subject: 'Test Email - SignFlow Email Service',
-      text: `Your test email from SignFlow. This is just a test to make sure emails are being sent correctly.`,
+      subject: 'Test Email - eSignTap Email Service',
+      text: `Your test email from eSignTap. This is just a test to make sure emails are being sent correctly.`,
       html: emailHtml
     });
 
@@ -33,8 +33,8 @@ async function testEmail() {
       signerEmail: 'malik.vk07@gmail.com',
       signerName: 'Malik',
       documentTitle: 'Test Document - Email Check',
-      senderName: 'SignFlow Test',
-      senderEmail: 'test@signflow.com',
+      senderName: 'eSignTap Test',
+      senderEmail: 'info@eSignTap.com',
       message: 'This is a test document to verify email templates are working.',
       signingUrl: 'https://example.com/test-signing-url'
     };
