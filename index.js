@@ -400,7 +400,7 @@ if (isLocalDevelopment) {
               private_key: serviceAccount.private_key
             }
           });
-          bucket = storage.bucket('demoimage-7189');
+          bucket = storage.bucket(process.env.GOOGLE_CLOUD_STORAGE_BUCKET);
           console.log('✅ Google Cloud Storage initialized successfully');
         } catch (parseError) {
           console.error('❌ Error parsing Google Cloud credentials JSON:', parseError.message);
@@ -415,7 +415,7 @@ if (isLocalDevelopment) {
     } else {
       // For local development
       storage = new Storage();
-      bucket = storage.bucket('demoimage-7189');
+      bucket = storage.bucket(process.env.GOOGLE_CLOUD_STORAGE_BUCKET);
     }
     
     // If we're in local mode (either by design or fallback), set up mock storage
@@ -814,12 +814,24 @@ app.post('/api/documents/upload', authenticateToken, upload.any(), async (req, r
 
     // Save main document to database
     await db.collection('documents').doc(documentId).set(documentData);
-
+    const safeFiles = documentData.files.map(file => ({
+      fileId: file.fileId,
+      originalName: file.originalName,
+      title: file.title,
+      mimeType: file.mimeType,
+      size: file.size,
+      fields: file.fields,
+      order: file.order
+    }));
+    const safeDocumentData = {
+      ...documentData,
+      files: safeFiles
+    };
     // Return response with the single document containing all files
     res.json({
       success: true,
       documentId: documentId,
-      document: documentData,
+      document: safeDocumentData,
       totalFiles: files.length
     });
     
@@ -1279,12 +1291,16 @@ app.get('/api/sign/:documentId', async (req, res) => {
     // Filter fields for this signer using assignedSigner (userId)
     let filteredFiles = [];
     if (documentData.files && Array.isArray(documentData.files)) {
-      filteredFiles = documentData.files.map(file => ({
-        ...file,
-        fields: Array.isArray(file.fields)
-          ? file.fields.filter(field => !field.assignedSigner || field.assignedSigner === currentSignerId)
-          : []
-      }));
+      filteredFiles = documentData.files.map(file => {
+        // Destructure to remove fileName and fileUrl, keep the rest
+        const { fileName, fileUrl, ...rest } = file;
+        return {
+          ...rest,
+          fields: Array.isArray(file.fields)
+            ? file.fields.filter(field => !field.assignedSigner || field.assignedSigner === currentSignerId)
+            : []
+        };
+      });
     }
     // Legacy support for single file documents
     let filteredFields = [];
@@ -1315,7 +1331,7 @@ app.get('/api/sign/:documentId', async (req, res) => {
       });
     }
 
-    console.log('✅ Document access granted for signing');
+    console.log('✅ Document access granted for signing1');
 
     // Return filtered document data including only allowed fields
     res.json({ 
@@ -1330,8 +1346,6 @@ app.get('/api/sign/:documentId', async (req, res) => {
         message: documentData.message || '',
         subject: documentData.subject || documentData.title,
         // Legacy support for single file documents
-        fileName: documentData.fileName,
-        fileUrl: documentData.fileUrl,
         originalName: documentData.originalName,
         mimeType: documentData.mimeType,
         fields: filteredFields
@@ -2843,7 +2857,7 @@ app.get('/api/test-sign/:documentId', async (req, res) => {
         subject: documentData.subject || documentData.title,
         // Legacy support for single file documents
         fileName: documentData.fileName,
-        fileUrl: documentData.fileUrl,
+        fileUrl: 'NA',//documentData.fileUrl,
         originalName: documentData.originalName,
         mimeType: documentData.mimeType,
         fields: documentData.fields || []
