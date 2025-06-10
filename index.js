@@ -385,7 +385,7 @@ if (isLocalDevelopment) {
       })
     });
     
-    db = getFirestore();
+    db = getFirestore(undefined, 'esigntap');
     
     // Initialize Google Cloud Storage using the working pattern
     if (process.env.NODE_ENV === 'production') {
