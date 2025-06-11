@@ -284,9 +284,9 @@ class PDFService {
 
   /**
    * Merge multiple documents and fill form fields
-   * @param {object} documentData
-   * @param {Array} signersData
-   * @param {object} bucket - GCS bucket instance
+   * If all files are images, merge them into a single PDF (one per page)
+   * If a file is not JPEG or PNG, skip it with a warning
+   * If no valid images, throw a clear error
    */
   async mergeDocumentsWithFields(documentData, signersData, bucket) {
     try {
@@ -299,11 +299,77 @@ class PDFService {
       let totalPages = 0;
       const files = documentData.files || [documentData];
       const filePagesList = [];
+      let allFilesAreImages = true;
+      let atLeastOneImage = false;
+      let imageFileBuffers = [];
+
+      // 1. Check if all files are images (JPEG or PNG)
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const fileName = file.fileName;
+        const [fileBuffer] = await bucket.file(fileName).download();
+        // Check if PDF
+        if (this.isPDF(fileBuffer)) {
+          allFilesAreImages = false;
+          break;
+        }
+        // Check if JPEG or PNG
+        const header = fileBuffer.slice(0, 10);
+        if ((header[0] === 0xFF && header[1] === 0xD8) || header.slice(0, 8).toString() === '\x89PNG\r\n\x1a\n') {
+          atLeastOneImage = true;
+          imageFileBuffers.push({ buffer: fileBuffer, file });
+        } else {
+          console.warn(`⚠️ File ${fileName} is not a supported image (JPEG/PNG), skipping.`);
+        }
+      }
+
+      if (allFilesAreImages && atLeastOneImage) {
+        // Merge all images into a single PDF (one per page)
+        for (const { buffer, file } of imageFileBuffers) {
+          let image;
+          const header = buffer.slice(0, 10);
+          if (header[0] === 0xFF && header[1] === 0xD8) {
+            image = await mergedPDF.embedJpg(buffer);
+          } else if (header.slice(0, 8).toString() === '\x89PNG\r\n\x1a\n') {
+            image = await mergedPDF.embedPng(buffer);
+          } else {
+            continue; // Already filtered above
+          }
+          // Calculate page size to fit image
+          const { width, height } = image;
+          const maxWidth = 595; // A4 width in points
+          const maxHeight = 842; // A4 height in points
+          let pageWidth = width;
+          let pageHeight = height;
+          if (width > maxWidth || height > maxHeight) {
+            const scale = Math.min(maxWidth / width, maxHeight / height);
+            pageWidth = width * scale;
+            pageHeight = height * scale;
+          }
+          const page = mergedPDF.addPage([pageWidth, pageHeight]);
+          page.drawImage(image, {
+            x: 0,
+            y: 0,
+            width: pageWidth,
+            height: pageHeight,
+          });
+        }
+        // No fields to add for images, or add as needed below
+        mergedPDF.setTitle(documentData.title || documentData.originalName || 'Signed Document');
+        mergedPDF.setSubject('Digitally Signed Document');
+        mergedPDF.setCreator('eSignTap');
+        mergedPDF.setProducer('eSignTap PDF Service');
+        mergedPDF.setCreationDate(new Date());
+        mergedPDF.setModificationDate(new Date());
+        const pdfBytes = await mergedPDF.save();
+        console.log('✅ All images merged into a single PDF successfully');
+        return Buffer.from(pdfBytes);
+      }
 
       // 1. Copy all pages from all files, and track mapping
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const fileName = file.fileName; // Use GCS path, not URL
+        const fileName = file.fileName;
         console.log(`📥 Processing file ${i + 1}/${files.length}: ${fileName}`);
         const [fileBuffer] = await bucket.file(fileName).download();
         let pdfBuffer;
