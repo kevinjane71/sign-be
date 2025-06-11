@@ -1,5 +1,11 @@
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
 const axios = require('axios');
+const { Storage } = require('@google-cloud/storage');
+const path = require('path');
+
+// Use the same bucket as in index.js
+const storage = new Storage();
+const bucket = storage.bucket(process.env.GOOGLE_CLOUD_STORAGE_BUCKET);
 
 class PDFService {
   constructor() {
@@ -11,6 +17,15 @@ class PDFService {
    */
   async downloadFile(url) {
     try {
+      // Check if this is a GCS URL
+      const gcsMatch = url.match(/https:\/\/storage\.googleapis\.com\/[^/]+\/(.+)/);
+      if (gcsMatch) {
+        const filePath = decodeURIComponent(gcsMatch[1]);
+        console.log(`📥 Downloading from GCS: ${filePath}`);
+        const [buffer] = await bucket.file(filePath).download();
+        return buffer;
+      }
+      // Fallback to HTTP(S) download
       console.log(`📥 Downloading file from: ${url}`);
       const response = await axios.get(url, { responseType: 'arraybuffer' });
       return Buffer.from(response.data);
