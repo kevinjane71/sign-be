@@ -1436,7 +1436,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
         
         // Generate completed PDF with all signatures
         console.log('📄 Generating completed PDF document...');
-        const completedPDF = await pdfService.generateCompletedDocument(documentData, updatedSigners);
+        const completedPDF = await pdfService.generateCompletedDocument(documentData, updatedSigners, bucket);
         
         console.log(`✅ PDF generated: ${completedPDF.filename}`);
         
@@ -2916,33 +2916,21 @@ app.get('/api/documents/:documentId/status', async (req, res) => {
 app.get('/api/documents/:documentId/download', async (req, res) => {
   try {
     const { documentId } = req.params;
-
     const docRef = db.collection('documents').doc(documentId);
     const doc = await docRef.get();
-
     if (!doc.exists) {
       return res.status(404).json({ error: 'Document not found' });
     }
-
     const documentData = doc.data();
-
-    // Check if document is completed
     if (documentData.status !== 'completed') {
       return res.status(400).json({ error: 'Document is not yet completed' });
     }
-
-    // Generate completed document with all signatures
     const signersData = documentData.signers.filter(signer => signer.signed);
-    const completedDoc = await pdfService.generateCompletedDocument(documentData, signersData);
-
-    // Set headers for download
+    const completedDoc = await pdfService.generateCompletedDocument(documentData, signersData, bucket);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${completedDoc.filename}"`);
     res.setHeader('Content-Length', completedDoc.buffer.length);
-
-    // Send the PDF buffer
     res.send(completedDoc.buffer);
-
   } catch (error) {
     console.error('Download document error:', error);
     res.status(500).json({ error: 'Failed to generate document download' });

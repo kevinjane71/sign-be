@@ -1,38 +1,8 @@
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
-const axios = require('axios');
-const { Storage } = require('@google-cloud/storage');
-const path = require('path');
-
-// Use the same bucket as in index.js
-const storage = new Storage();
-const bucket = storage.bucket(process.env.GOOGLE_CLOUD_STORAGE_BUCKET);
 
 class PDFService {
   constructor() {
     console.log('📄 PDF Service initialized');
-  }
-
-  /**
-   * Download file from URL to buffer
-   */
-  async downloadFile(url) {
-    try {
-      // Check if this is a GCS URL
-      const gcsMatch = url.match(/https:\/\/storage\.googleapis\.com\/[^/]+\/(.+)/);
-      if (gcsMatch) {
-        const filePath = decodeURIComponent(gcsMatch[1]);
-        console.log(`📥 Downloading from GCS: ${filePath}`);
-        const [buffer] = await bucket.file(filePath).download();
-        return buffer;
-      }
-      // Fallback to HTTP(S) download
-      console.log(`📥 Downloading file from: ${url}`);
-      const response = await axios.get(url, { responseType: 'arraybuffer' });
-      return Buffer.from(response.data);
-    } catch (error) {
-      console.error('❌ Download error:', error.message);
-      throw new Error(`Failed to download file: ${error.message}`);
-    }
   }
 
   /**
@@ -314,15 +284,18 @@ class PDFService {
 
   /**
    * Merge multiple documents and fill form fields
+   * @param {object} documentData
+   * @param {Array} signersData
+   * @param {object} bucket - GCS bucket instance
    */
-  async mergeDocumentsWithFields(documentData, signersData) {
+  async mergeDocumentsWithFields(documentData, signersData, bucket) {
     try {
       console.log('🔄 Starting document merge and field filling...');
       console.log(`📄 Processing document: ${documentData.title || documentData.originalName}`);
       console.log(`👥 Processing ${signersData.length} signer(s)`);
 
       const mergedPDF = await PDFDocument.create();
-      const filePageStartIndices = []; // Track the starting global page index for each file
+      const filePageStartIndices = [];
       let totalPages = 0;
       const files = documentData.files || [documentData];
       const filePagesList = [];
@@ -330,9 +303,9 @@ class PDFService {
       // 1. Copy all pages from all files, and track mapping
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const fileUrl = file.fileUrl || file.url;
-        console.log(`📥 Processing file ${i + 1}/${files.length}: ${fileUrl}`);
-        const fileBuffer = await this.downloadFile(fileUrl);
+        const fileName = file.fileName; // Use GCS path, not URL
+        console.log(`📥 Processing file ${i + 1}/${files.length}: ${fileName}`);
+        const [fileBuffer] = await bucket.file(fileName).download();
         let pdfBuffer;
         if (this.isPDF(fileBuffer)) {
           pdfBuffer = fileBuffer;
@@ -342,8 +315,8 @@ class PDFService {
         const sourcePDF = await PDFDocument.load(pdfBuffer);
         const pageIndices = sourcePDF.getPageIndices();
         const pages = await mergedPDF.copyPages(sourcePDF, pageIndices);
-        filePageStartIndices.push(totalPages); // Start index for this file
-        filePagesList.push(pages.length); // Number of pages in this file
+        filePageStartIndices.push(totalPages);
+        filePagesList.push(pages.length);
         pages.forEach(page => mergedPDF.addPage(page));
         totalPages += pages.length;
       }
@@ -510,25 +483,20 @@ class PDFService {
 
   /**
    * Generate completed document PDF with all signatures
+   * @param {object} documentData
+   * @param {Array} signersData
+   * @param {object} bucket - GCS bucket instance
    */
-  async generateCompletedDocument(documentData, signersData) {
+  async generateCompletedDocument(documentData, signersData, bucket) {
     try {
       console.log('🎯 Generating completed document PDF...');
-      
-      // Only include signers who have actually signed
       const signedSigners = signersData.filter(signer => signer.signed);
-      
       if (signedSigners.length === 0) {
         throw new Error('No signed data available for PDF generation');
       }
-
       console.log(`📝 Processing ${signedSigners.length} signed signer(s) out of ${signersData.length} total`);
-      
-      // Generate merged PDF with all signatures
-      const completedPDFBuffer = await this.mergeDocumentsWithFields(documentData, signedSigners);
-      
+      const completedPDFBuffer = await this.mergeDocumentsWithFields(documentData, signedSigners, bucket);
       const documentTitle = documentData.title || documentData.originalName || 'completed-document';
-      
       return {
         buffer: completedPDFBuffer,
         filename: `${documentTitle}-signed.pdf`
