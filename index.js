@@ -3483,3 +3483,159 @@ app.get('/api/user/signatures/:id/image', authenticateToken, async (req, res) =>
     res.status(500).json({ error: 'Failed to fetch image' });
   }
 });
+
+// Contact Management APIs
+const CONTACTS_COLLECTION = 'user_contacts';
+
+// Create/Update Contact
+app.post('/api/user/contacts', authenticateToken, async (req, res) => {
+  try {
+    const { name, email, phone, company, comment } = req.body;
+    if (!name || !email) {
+      return res.status(400).json({ error: 'Name and email are required' });
+    }
+
+    const contactData = {
+      userId: req.user.userId,
+      name,
+      email,
+      phone: phone || '',
+      company: company || '',
+      comment: comment || '',
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
+    };
+
+    const docRef = await db.collection(CONTACTS_COLLECTION).add(contactData);
+    res.json({ success: true, id: docRef.id });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to create contact' });
+  }
+});
+
+// Get Contacts with Pagination
+app.get('/api/user/contacts', authenticateToken, async (req, res) => {
+  try {
+    const { page = 1, limit = 10, search = '' } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const offset = (pageNum - 1) * limitNum;
+
+    // Fetch all contacts for the user
+    let query = db.collection(CONTACTS_COLLECTION).where('userId', '==', req.user.userId);
+    let allContacts = [];
+    const snapshot = await query.get();
+    snapshot.forEach(doc => {
+      allContacts.push({
+        id: doc.id,
+        ...doc.data(),
+        createdAt: doc.data().createdAt?.toDate ? doc.data().createdAt.toDate() : doc.data().createdAt,
+        updatedAt: doc.data().updatedAt?.toDate ? doc.data().updatedAt.toDate() : doc.data().updatedAt
+      });
+    });
+
+    // Filter by search (name or email)
+    let filtered = allContacts;
+    if (search) {
+      const s = search.toLowerCase();
+      filtered = allContacts.filter(c =>
+        (c.name && c.name.toLowerCase().includes(s)) ||
+        (c.email && c.email.toLowerCase().includes(s))
+      );
+    }
+
+    // Paginate in memory
+    const total = filtered.length;
+    const paginated = filtered.slice(offset, offset + limitNum);
+
+    res.json({
+      success: true,
+      contacts: paginated,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        pages: Math.ceil(total / limitNum)
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch contacts' });
+  }
+});
+
+// Update Contact
+app.put('/api/user/contacts/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, email, phone, company, comment } = req.body;
+
+    const docRef = db.collection(CONTACTS_COLLECTION).doc(id);
+    const doc = await docRef.get();
+
+    if (!doc.exists || doc.data().userId !== req.user.userId) {
+      return res.status(404).json({ error: 'Contact not found' });
+    }
+
+    const updateData = {
+      ...(name && { name }),
+      ...(email && { email }),
+      ...(phone && { phone }),
+      ...(company && { company }),
+      ...(comment && { comment }),
+      updatedAt: FieldValue.serverTimestamp()
+    };
+
+    await docRef.update(updateData);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to update contact' });
+  }
+});
+
+// Delete Contact
+app.delete('/api/user/contacts/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const docRef = db.collection(CONTACTS_COLLECTION).doc(id);
+    const doc = await docRef.get();
+
+    if (!doc.exists || doc.data().userId !== req.user.userId) {
+      return res.status(404).json({ error: 'Contact not found' });
+    }
+
+    await docRef.delete();
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to delete contact' });
+  }
+});
+
+// Search Contacts (for email autocomplete)
+app.get('/api/user/contacts/search', authenticateToken, async (req, res) => {
+  try {
+    const { query = '' } = req.query;
+    if (!query) {
+      return res.json({ success: true, contacts: [] });
+    }
+
+    const snapshot = await db.collection(CONTACTS_COLLECTION)
+      .where('userId', '==', req.user.userId)
+      .where('email', '>=', query)
+      .where('email', '<=', query + '\uf8ff')
+      .limit(5)
+      .get();
+
+    const contacts = [];
+    snapshot.forEach(doc => {
+      contacts.push({
+        id: doc.id,
+        email: doc.data().email,
+        name: doc.data().name
+      });
+    });
+
+    res.json({ success: true, contacts });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to search contacts' });
+  }
+});
