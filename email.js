@@ -242,14 +242,14 @@ eSignTap Team`,
         </div>
       </div>
 
-      <!-- Action Button -->
+      <!-- 
       <div style="text-align: center; margin: 32px 0 24px 0;">
         <a href="${documentData.downloadUrl}" 
            style="display: inline-block; background: linear-gradient(135deg, #10B981 0%, #059669 100%); color: white; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3); transition: all 0.3s ease;">
           📥 Download Signed Document
         </a>
       </div>
-      
+      -->
       <p style="font-size: 13px; color: #6B7280; text-align: center; font-style: italic; margin-bottom: 0;">
         Keep this document in a secure location. You can download it anytime from your eSingTap dashboard.
       </p>

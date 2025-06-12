@@ -354,7 +354,12 @@ class PDFService {
             height: pageHeight,
           });
         }
-        // No fields to add for images, or add as needed below
+        // Overlay fields for each signer (just like for PDFs)
+        for (const signerData of signersData) {
+          if (signerData.signed && signerData.fieldValues) {
+            await this.addFieldsToPDF(mergedPDF, documentData, signerData);
+          }
+        }
         mergedPDF.setTitle(documentData.title || documentData.originalName || 'Signed Document');
         mergedPDF.setSubject('Digitally Signed Document');
         mergedPDF.setCreator('eSignTap');
@@ -362,7 +367,7 @@ class PDFService {
         mergedPDF.setCreationDate(new Date());
         mergedPDF.setModificationDate(new Date());
         const pdfBytes = await mergedPDF.save();
-        console.log('✅ All images merged into a single PDF successfully');
+        console.log('✅ All images merged into a single PDF with fields successfully');
         return Buffer.from(pdfBytes);
       }
 

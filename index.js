@@ -1452,7 +1452,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
           recipientName: ownerData?.name || documentData.createdBy?.name || 'Document Owner',
           documentTitle: documentTitle,
           signers: signersList,
-          downloadUrl: `${process.env.FRONTEND_URL_WEB}/api/documents/${documentId}/download`
+          downloadUrl: `${API_BASE_URL}/api/documents/${documentId}/download`
         };
 
         console.log(`📧 Sending completed PDF to document owner: ${ownerEmailData.recipientEmail}`);
@@ -1465,7 +1465,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
             recipientName: signer.name || signer.email.split('@')[0],
             documentTitle: documentTitle,
             signers: signersList,
-            downloadUrl: `${process.env.FRONTEND_URL_WEB}/api/documents/${documentId}/download`
+            downloadUrl: `${API_BASE_URL}/api/documents/${documentId}/download`
           };
 
           console.log(`📧 Sending completed PDF to signer: ${signer.email}`);
@@ -1489,7 +1489,7 @@ app.post('/api/sign/:documentId/submit', async (req, res) => {
       message: 'Signature submitted successfully',
       allSigned: allSigned,
       documentStatus: updateData.status,
-      downloadUrl: allSigned ? `${process.env.FRONTEND_URL_WEB}/api/documents/${documentId}/download` : null
+      downloadUrl: allSigned ? `${API_BASE_URL}/api/documents/${documentId}/download` : null
     });
   } catch (error) {
     console.error('Submit signature error:', error);
@@ -2911,7 +2911,7 @@ app.get('/api/documents/:documentId/status', async (req, res) => {
     const signers = documentData.signers || [];
     const allSigned = signers.length > 0 && signers.every(s => s.signed);
     const downloadUrl = documentData.status === 'completed'
-      ? `${process.env.FRONTEND_URL_WEB}/api/documents/${documentId}/download`
+      ? `${API_BASE_URL}/api/documents/${documentId}/download`
       : null;
 
     res.json({ 
@@ -3289,3 +3289,6 @@ app.delete('/api/user/signatures/:id', authenticateToken, async (req, res) => {
   }
 });
 // --- END Signature & Stamp Management API ---
+
+// Add at the top (after other env/config):
+const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:5002';
