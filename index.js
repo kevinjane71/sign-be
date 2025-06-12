@@ -1101,6 +1101,20 @@ app.post('/api/documents/:documentId/send', authenticateToken, verifyDocumentOwn
       updatedAt: isLocalMode ? new Date().toISOString() : FieldValue.serverTimestamp()
     };
 
+    // If document was completed, reset signers and completedAt
+    if (documentData.status === 'completed') {
+      if (Array.isArray(documentData.signers)) {
+        updateData.signers = documentData.signers.map(signer => ({
+          ...signer,
+          signed: false,
+          signedAt: null,
+          signatureData: null,
+          fieldValues: null
+        }));
+      }
+      updateData.completedAt = null;
+    }
+
     // Handle fileFields for multi-file documents
     if (fileFields && Array.isArray(fileFields)) {
       // Update fields in the files array
@@ -1131,7 +1145,13 @@ app.post('/api/documents/:documentId/send', authenticateToken, verifyDocumentOwn
 
     // Update signers if provided
     if (signers && Array.isArray(signers)) {
-      updateData.signers = signers;
+      updateData.signers = signers.map(signer => ({
+        ...signer,
+        signed: false,
+        signedAt: null,
+        signatureData: null,
+        fieldValues: null
+      }));
     }
 
     // Update configuration if provided
