@@ -947,7 +947,14 @@ app.get('/api/documents/stats', authenticateToken, async (req, res) => {
 app.get('/api/documents/:documentId', authenticateToken, verifyDocumentOwnership, async (req, res) => {
   try {
     const documentData = req.document; // From verifyDocumentOwnership middleware
-    res.json({ success: true, document: documentData });
+    const { expired, expiresAt } = getExpirationInfo(documentData);
+    if (expired) {
+      const docRef = db.collection('documents').doc(req.params.documentId);
+      if (documentData.status !== 'expired') {
+        await docRef.update({ status: 'expired', expiredAt: new Date().toISOString() });
+      }
+    }
+    res.json({ success: true, document: { ...documentData, status: expired ? 'expired' : documentData.status, expiredAt: expiresAt } });
   } catch (error) {
     console.error('Get document error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -1352,6 +1359,19 @@ app.get('/api/sign/:documentId', async (req, res) => {
     }
 
     console.log('✅ Document access granted for signing1');
+
+    // --- Expiration check ---
+    const { expired, expiresAt } = getExpirationInfo(documentData);
+    if (expired) {
+      // Mark as expired in DB if not already
+      if (documentData.status !== 'expired') {
+        await docRef.update({ status: 'expired', expiredAt: new Date().toISOString() });
+      }
+      return res.status(410).json({
+        error: 'Document expired',
+        message: 'This document has expired. Please contact the sender to re-share.'
+      });
+    }
 
     // Return filtered document data including only allowed fields
     res.json({ 
@@ -2934,6 +2954,29 @@ app.get('/api/documents/:documentId/status', async (req, res) => {
       ? `${API_BASE_URL}/api/documents/${documentId}/download`
       : null;
 
+    const { expired, expiresAt } = getExpirationInfo(documentData);
+    if (expired) {
+      if (documentData.status !== 'expired') {
+        await docRef.update({ status: 'expired', expiredAt: new Date().toISOString() });
+      }
+      return res.json({
+        success: true,
+        document: {
+          id: documentId,
+          title: documentData.title,
+          status: 'expired',
+          signers: signers,
+          completedAt: documentData.completedAt,
+          createdAt: documentData.createdAt,
+          expiredAt: expiresAt,
+          allSigned: false,
+          downloadUrl: null
+        },
+        expired: true,
+        message: 'This document has expired.'
+      });
+    }
+
     res.json({ 
       success: true, 
       document: {
@@ -3312,3 +3355,87 @@ app.delete('/api/user/signatures/:id', authenticateToken, async (req, res) => {
 
 // Add at the top (after other env/config):
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:5002';
+
+// --- UTILITY: Calculate expiration and reminder days ---
+function getExpirationInfo(documentData) {
+  const config = documentData.configuration || {};
+  const expirationEnabled = typeof config.expirationEnabled === 'boolean' ? config.expirationEnabled : true;
+  const expirationDays = config.expirationDays ? parseInt(config.expirationDays) : 30;
+  const createdAt = documentData.createdAt ? new Date(documentData.createdAt) : null;
+  let expired = false;
+  let expiresAt = null;
+  if (expirationEnabled && createdAt) {
+    expiresAt = new Date(createdAt.getTime() + expirationDays * 24 * 60 * 60 * 1000);
+    expired = new Date() > expiresAt;
+  }
+  return { expired, expiresAt, expirationEnabled, expirationDays };
+}
+
+function getReminderInfo(documentData) {
+  const config = documentData.configuration || {};
+  const sendReminders = typeof config.sendReminders === 'boolean' ? config.sendReminders : true;
+  const reminderFrequency = config.reminderFrequency ? parseInt(config.reminderFrequency) : 5;
+  return { sendReminders, reminderFrequency };
+}
+
+// --- REMINDER BATCH ENDPOINT ---
+app.post('/api/reminders/send', async (req, res) => {
+  try {
+    const now = new Date();
+    // Support forceAll param (from query string)
+    const forceAll = req.query.forceAll === 'true' || req.body.forceAll === true;
+    const docsSnapshot = await db.collection('documents').where('status', '==', 'sent').get();
+    let remindersSent = 0;
+    for (const doc of docsSnapshot.docs) {
+      const documentData = doc.data();
+      const documentId = doc.id;
+      const { expired } = getExpirationInfo(documentData);
+      if (expired) continue;
+      const { sendReminders, reminderFrequency } = getReminderInfo(documentData);
+      if (!sendReminders) continue;
+      const signers = documentData.signers || [];
+      for (const signer of signers) {
+        if (signer.signed) continue;
+        let shouldSend = false;
+        if (forceAll) {
+          shouldSend = true;
+        } else {
+          // Check lastReminderSent (store per signer, fallback to sentAt)
+          let lastReminder = signer.lastReminderSent ? new Date(signer.lastReminderSent) : (documentData.sentAt ? new Date(documentData.sentAt) : null);
+          if (!lastReminder) lastReminder = now;
+          const daysSince = Math.floor((now - lastReminder) / (1000 * 60 * 60 * 24));
+          if (daysSince >= reminderFrequency) {
+            shouldSend = true;
+          }
+        }
+        if (shouldSend) {
+          // Send reminder email
+          const signingToken = generateSigningToken(documentId, signer.email);
+          const signingUrl = `${process.env.FRONTEND_URL_WEB}/sign/${documentId}?signer=${encodeURIComponent(signer.email)}&token=${signingToken}`;
+          const emailData = {
+            signerEmail: signer.email,
+            signerName: signer.name || signer.email.split('@')[0],
+            documentTitle: documentData.title || documentData.originalName || 'Document',
+            senderName: documentData.createdBy?.name || 'Document Sender',
+            senderEmail: documentData.createdBy?.email || 'info@eSignTap.com',
+            message: documentData.message || '',
+            signingUrl: signingUrl
+          };
+          try {
+            await emailService.sendDocumentShareEmail(emailData);
+            remindersSent++;
+            // Update lastReminderSent for this signer
+            const updatedSigners = signers.map(s => s.email === signer.email ? { ...s, lastReminderSent: now.toISOString() } : s);
+            await db.collection('documents').doc(documentId).update({ signers: updatedSigners });
+          } catch (err) {
+            console.error('Failed to send reminder email to', signer.email, err);
+          }
+        }
+      }
+    }
+    res.json({ success: true, remindersSent });
+  } catch (error) {
+    console.error('Reminder batch error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
