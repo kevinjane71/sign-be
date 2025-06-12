@@ -3194,7 +3194,7 @@ app.post('/auth/reset-password', async (req, res) => {
 
 const SIGNATURE_COLLECTION = 'user_signatures';
 const MAX_SIGNS_PER_TYPE = 10;
-const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20MB
+const MAX_IMAGE_SIZE = 30 * 1024 * 1024; // 30MB
 
 // List all signatures/stamps for user
 app.get('/api/user/signatures', authenticateToken, async (req, res) => {
@@ -3204,7 +3204,14 @@ app.get('/api/user/signatures', authenticateToken, async (req, res) => {
     if (type) query = query.where('type', '==', type);
     const snap = await query.get();
     const results = [];
-    snap.forEach(doc => results.push({ id: doc.id, ...doc.data() }));
+    snap.forEach(doc => {
+      const data = doc.data();
+      results.push({
+        id: doc.id,
+        ...data,
+        imageUrl: `${API_BASE_URL}/api/user/signatures/${doc.id}/image`
+      });
+    });
     res.json({ success: true, items: results });
   } catch (e) {
     res.status(500).json({ error: 'Failed to fetch signatures' });
@@ -3235,7 +3242,7 @@ app.post('/api/user/signatures', authenticateToken, upload.single('image'), asyn
     let imageUrl = null;
     if (req.file) {
       if (req.file.size > MAX_IMAGE_SIZE) {
-        return res.status(400).json({ error: 'Image too large (max 20MB)' });
+        return res.status(400).json({ error: 'Image too large (max 30MB)' });
       }
       const ext = path.extname(req.file.originalname).toLowerCase();
       if (!['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) {
@@ -3252,7 +3259,7 @@ app.post('/api/user/signatures', authenticateToken, upload.single('image'), asyn
       if (!matches) return res.status(400).json({ error: 'Invalid image data' });
       const buffer = Buffer.from(matches[2], 'base64');
       if (buffer.length > MAX_IMAGE_SIZE) {
-        return res.status(400).json({ error: 'Image too large (max 20MB)' });
+        return res.status(400).json({ error: 'Image too large (max 30MB)' });
       }
       const ext = matches[1].split('/')[1];
       const fileName = `user_signatures/${req.user.userId}/${Date.now()}_${alias}.${ext}`;
@@ -3303,7 +3310,7 @@ app.put('/api/user/signatures/:id', authenticateToken, upload.single('image'), a
     }
     if (req.file) {
       if (req.file.size > MAX_IMAGE_SIZE) {
-        return res.status(400).json({ error: 'Image too large (max 20MB)' });
+        return res.status(400).json({ error: 'Image too large (max 30MB)' });
       }
       const ext = path.extname(req.file.originalname).toLowerCase();
       if (!['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) {
@@ -3319,7 +3326,7 @@ app.put('/api/user/signatures/:id', authenticateToken, upload.single('image'), a
       if (!matches) return res.status(400).json({ error: 'Invalid image data' });
       const buffer = Buffer.from(matches[2], 'base64');
       if (buffer.length > MAX_IMAGE_SIZE) {
-        return res.status(400).json({ error: 'Image too large (max 20MB)' });
+        return res.status(400).json({ error: 'Image too large (max 30MB)' });
       }
       const ext = matches[1].split('/')[1];
       const fileName = `user_signatures/${req.user.userId}/${Date.now()}_${alias || doc.data().alias}.${ext}`;
@@ -3438,5 +3445,41 @@ app.post('/api/reminders/send', async (req, res) => {
   } catch (error) {
     console.error('Reminder batch error:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Securely serve signature/stamp image
+app.get('/api/user/signatures/:id/image', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const docRef = db.collection('user_signatures').doc(id);
+    const doc = await docRef.get();
+    if (!doc.exists || doc.data().userId !== req.user.userId) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const { imageUrl } = doc.data();
+    if (!imageUrl) return res.status(404).json({ error: 'No image' });
+
+    // Extract file path
+    let filePath;
+    if (imageUrl.startsWith('https://storage.googleapis.com/')) {
+      filePath = imageUrl.replace(`https://storage.googleapis.com/${bucket.name}/`, '');
+    } else if (imageUrl.startsWith('/uploads/')) {
+      filePath = imageUrl.replace('/uploads/', '');
+    } else {
+      return res.status(400).json({ error: 'Invalid image URL' });
+    }
+
+    // Download file buffer
+    const [fileBuffer] = await bucket.file(filePath).download();
+    // Try to detect content type from extension
+    let contentType = 'image/png';
+    if (filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) contentType = 'image/jpeg';
+    else if (filePath.endsWith('.gif')) contentType = 'image/gif';
+    else if (filePath.endsWith('.webp')) contentType = 'image/webp';
+    res.setHeader('Content-Type', contentType);
+    res.send(fileBuffer);
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch image' });
   }
 });
