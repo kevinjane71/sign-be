@@ -1960,6 +1960,27 @@ app.delete('/api/documents/:documentId/signers/:signerId', async (req, res) => {
   }
 });
 
+// Delete a file from a document (remove from Firestore and storage)
+app.delete('/api/documents/:documentId/file/:fileId', authenticateToken, verifyDocumentOwnership, async (req, res) => {
+  try {
+    const { documentId, fileId } = req.params;
+    const docRef = db.collection('documents').doc(documentId);
+    const doc = await docRef.get();
+    if (!doc.exists) return res.status(404).json({ error: 'Document not found' });
+    const documentData = doc.data();
+    const fileInfo = documentData.files.find(f => f.fileId === fileId);
+    if (!fileInfo) return res.status(404).json({ error: 'File not found' });
+    // Remove from storage
+    await bucket.file(fileInfo.fileName).delete();
+    // Remove from files array
+    const updatedFiles = documentData.files.filter(f => f.fileId !== fileId);
+    await docRef.update({ files: updatedFiles });
+    res.json({ success: true, message: 'File deleted' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete file' });
+  }
+});
+
 // ==================== AUTHENTICATION ENDPOINTS ====================
 
 // Google OAuth scopes for eSignTap
