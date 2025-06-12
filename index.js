@@ -3419,7 +3419,8 @@ app.post('/api/reminders/send', async (req, res) => {
             senderName: documentData.createdBy?.name || 'Document Sender',
             senderEmail: documentData.createdBy?.email || 'info@eSignTap.com',
             message: documentData.message || '',
-            signingUrl: signingUrl
+            signingUrl: signingUrl,
+            isReminder: true // Ensure this is set for reminders
           };
           try {
             await emailService.sendDocumentShareEmail(emailData);

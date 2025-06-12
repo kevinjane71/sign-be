@@ -33,9 +33,11 @@ class EmailService {
     this.templates = {
       // Document Signing Templates
       documentShare: {
-        getSubject: (documentTitle) => `🔔 Action Required: Sign "${documentTitle}" - eSignTap`,
+        getSubject: (documentTitle, isReminder) => isReminder
+          ? `Reminder: Action Required to Sign "${documentTitle}" - eSignTap`
+          : `Action Required: Sign "${documentTitle}" - eSignTap`,
         
-        text: (documentData) => `
+        text: (documentData, isReminder) => `
 Dear ${documentData.signerName},
 
 You have received a document that requires your signature.
@@ -52,14 +54,13 @@ This signature request will expire in 30 days.
 Best regards,
 eSignTap Team`,
 
-        html: (documentData) => `
+        html: (documentData, isReminder) => `
 <!DOCTYPE html>
 <html>
 <body style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f5f7fa;">
   <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);">
     <!-- Header -->
     <div style="background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); padding: 40px 20px; text-align: center;">
-      <div style="font-size: 50px; margin-bottom: 15px;">✍️📋</div>
       <h1 style="color: #ffffff; margin: 0; font-size: 28px; letter-spacing: 0.5px;">Action Required: Sign Document</h1>
       <p style="color: #E0E7FF; margin-top: 10px; font-size: 16px;">
         Your signature is needed to complete this document
@@ -86,9 +87,7 @@ eSignTap Team`,
       <!-- Document Info -->
       <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; padding: 20px; margin: 24px 0;">
         <div style="display: flex; align-items: center; margin-bottom: 16px;">
-          <div style="width: 40px; height: 40px; margin-right: 12px; background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); border-radius: 8px; display: flex; align-items: center; justify-content: center;">
-            <span style="font-size: 20px; color: white;">📄</span>
-          </div>
+          <div style="width: 40px; height: 40px; margin-right: 12px; background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); border-radius: 8px; display: flex; align-items: center; justify-content: center;"></div>
           <div>
             <p style="margin: 0; font-size: 14px; color: #6B7280;">Document</p>
             <p style="margin: 0; font-size: 16px; font-weight: 600; color: #111827;">${documentData.documentTitle}</p>
@@ -96,9 +95,7 @@ eSignTap Team`,
         </div>
         
         <div style="display: flex; align-items: center; margin-bottom: 16px;">
-          <div style="width: 40px; height: 40px; margin-right: 12px; background: #10B981; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
-            <span style="font-size: 20px; color: white;">👤</span>
-          </div>
+          <div style="width: 40px; height: 40px; margin-right: 12px; background: #10B981; border-radius: 8px; display: flex; align-items: center; justify-content: center;"></div>
           <div>
             <p style="margin: 0; font-size: 14px; color: #6B7280;">From</p>
             <p style="margin: 0; font-size: 16px; font-weight: 500; color: #111827;">${documentData.senderName}</p>
@@ -107,9 +104,7 @@ eSignTap Team`,
         </div>
         
         <div style="display: flex; align-items: center;">
-          <div style="width: 40px; height: 40px; margin-right: 12px; background: #F59E0B; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
-            <span style="font-size: 20px; color: white;">⏰</span>
-          </div>
+          <div style="width: 40px; height: 40px; margin-right: 12px; background: #F59E0B; border-radius: 8px; display: flex; align-items: center; justify-content: center;"></div>
           <div>
             <p style="margin: 0; font-size: 14px; color: #6B7280;">Sent</p>
             <p style="margin: 0; font-size: 16px; font-weight: 500; color: #111827;">${documentData.sentDate}</p>
@@ -120,7 +115,6 @@ eSignTap Team`,
       <!-- Security Notice -->
       <div style="background-color: #FEF3C7; border: 1px solid #F59E0B; border-radius: 8px; padding: 16px; margin: 24px 0;">
         <div style="display: flex; align-items: center;">
-          <span style="font-size: 20px; margin-right: 8px;">🔒</span>
           <p style="margin: 0; font-size: 14px; color: #92400E; font-weight: 500;">
             This document is secured and can only be accessed by authorized signers.
           </p>
@@ -131,7 +125,7 @@ eSignTap Team`,
       <div style="text-align: center; margin: 32px 0 24px 0;">
         <a href="${documentData.signingUrl}" 
            style="display: inline-block; background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); color: white; padding: 18px 40px; text-decoration: none; border-radius: 10px; font-weight: bold; font-size: 18px; text-transform: uppercase; letter-spacing: 1px; box-shadow: 0 6px 20px rgba(79, 70, 229, 0.4); transition: all 0.3s ease; margin: 10px;">
-          ✍️ START SIGNING NOW
+          START SIGNING NOW
         </a>
         <p style="margin: 16px 0 0 0; font-size: 14px; color: #6B7280;">
           Click the button above to review and sign the document
@@ -158,7 +152,7 @@ eSignTap Team`,
       },
 
       documentCompleted: {
-        getSubject: (documentTitle) => `✅ Document Signed: ${documentTitle}`,
+        getSubject: (documentTitle) => `Document Signed: ${documentTitle}`,
         
         text: (documentData) => `
 Dear ${documentData.recipientName},
@@ -185,7 +179,7 @@ eSignTap Team`,
   <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);">
     <!-- Header -->
     <div style="background: linear-gradient(135deg, #10B981 0%, #059669 100%); padding: 40px 20px; text-align: center;">
-      <h1 style="color: #ffffff; margin: 0; font-size: 28px; letter-spacing: 0.5px;">Document Completed!</h1>
+      <h1 style="color: #ffffff; margin: 0; font-size: 28px; letter-spacing: 0.5px;">Document Completed</h1>
       <p style="color: #D1FAE5; margin-top: 10px; font-size: 16px;">
         All signatures have been collected successfully
       </p>
@@ -203,12 +197,10 @@ eSignTap Team`,
 
       <!-- Document Info -->
       <div style="background-color: #F9FAFB; border: 1px solid #E5E7EB; border-radius: 8px; padding: 20px; margin: 24px 0;">
-        <h3 style="margin: 0 0 16px 0; color: #111827; font-size: 18px;">📋 Document Summary</h3>
+        <h3 style="margin: 0 0 16px 0; color: #111827; font-size: 18px;">Document Summary</h3>
         
         <div style="display: flex; align-items: center; margin-bottom: 16px;">
-          <div style="width: 40px; height: 40px; margin-right: 12px; background: linear-gradient(135deg, #10B981 0%, #059669 100%); border-radius: 8px; display: flex; align-items: center; justify-content: center;">
-            <span style="font-size: 20px; color: white;">📄</span>
-          </div>
+          <div style="width: 40px; height: 40px; margin-right: 12px; background: linear-gradient(135deg, #10B981 0%, #059669 100%); border-radius: 8px; display: flex; align-items: center; justify-content: center;"></div>
           <div>
             <p style="margin: 0; font-size: 14px; color: #6B7280;">Document</p>
             <p style="margin: 0; font-size: 16px; font-weight: 600; color: #111827;">${documentData.documentTitle}</p>
@@ -216,9 +208,7 @@ eSignTap Team`,
         </div>
         
         <div style="display: flex; align-items: center; margin-bottom: 16px;">
-          <div style="width: 40px; height: 40px; margin-right: 12px; background: #3B82F6; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
-            <span style="font-size: 20px; color: white;">✅</span>
-          </div>
+          <div style="width: 40px; height: 40px; margin-right: 12px; background: #3B82F6; border-radius: 8px; display: flex; align-items: center; justify-content: center;"></div>
           <div>
             <p style="margin: 0; font-size: 14px; color: #6B7280;">Completed</p>
             <p style="margin: 0; font-size: 16px; font-weight: 500; color: #111827;">${documentData.completedDate}</p>
@@ -226,9 +216,7 @@ eSignTap Team`,
         </div>
         
         <div style="display: flex; align-items: flex-start;">
-          <div style="width: 40px; height: 40px; margin-right: 12px; background: #8B5CF6; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
-            <span style="font-size: 20px; color: white;">👥</span>
-          </div>
+          <div style="width: 40px; height: 40px; margin-right: 12px; background: #8B5CF6; border-radius: 8px; display: flex; align-items: center; justify-content: center;"></div>
           <div>
             <p style="margin: 0 0 8px 0; font-size: 14px; color: #6B7280;">Signers</p>
             ${documentData.signers.map(signer => `
@@ -242,22 +230,14 @@ eSignTap Team`,
         </div>
       </div>
 
-      <!-- 
-      <div style="text-align: center; margin: 32px 0 24px 0;">
-        <a href="${documentData.downloadUrl}" 
-           style="display: inline-block; background: linear-gradient(135deg, #10B981 0%, #059669 100%); color: white; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3); transition: all 0.3s ease;">
-          📥 Download Signed Document
-        </a>
-      </div>
-      -->
       <p style="font-size: 13px; color: #6B7280; text-align: center; font-style: italic; margin-bottom: 0;">
-        Keep this document in a secure location. You can download it anytime from your eSingTap dashboard.
+        Keep this document in a secure location. You can download it anytime from your eSignTap dashboard.
       </p>
     </div>
 
     <!-- Footer -->
     <div style="background-color: #F3F4F6; padding: 24px; text-align: center; border-top: 1px solid #E5E7EB;">
-      <p style="color: #6B7280; margin: 0; font-size: 14px;">© ${new Date().getFullYear()} eSingTap. Professional Document Signing.</p>
+      <p style="color: #6B7280; margin: 0; font-size: 14px;">© ${new Date().getFullYear()} eSignTap. Professional Document Signing.</p>
       <div style="margin-top: 16px;">
         <a href="https://esigntap.com/dashboard" style="color: #10B981; text-decoration: none; margin: 0 8px; font-size: 14px;">Dashboard</a>
         <a href="https://esigntap.com/help" style="color: #10B981; text-decoration: none; margin: 0 8px; font-size: 14px;">Help Center</a>
@@ -299,7 +279,7 @@ ${meetingData.isReschedule
   : 'The meeting has been added to your calendar. You will receive a calendar invitation separately.'}
 
 Best regards,
-The E-SignTap Team`,
+The eSignTap Team`,
 
         html: (meetingData) => `
 <!DOCTYPE html>
@@ -407,7 +387,7 @@ The E-SignTap Team`,
         text: (userData) => `
 Dear ${userData.name},
 
-Welcome to eSignTap! You've just unlocked a smarter way to schedule meetings.
+Welcome to eSignTap! You\'ve just unlocked a smarter way to schedule meetings.
 
 Key Features:
 - AI-Powered Scheduling: Intelligent time suggestions based on your preferences
@@ -438,26 +418,26 @@ The eSignTap Team`,
       <p style="font-size: 16px; color: #4B5563;">Dear ${userData?.name},</p>
       
       <p style="font-size: 16px; color: #4B5563; margin-bottom: 24px;">
-        You've just unlocked a smarter way to schedule meetings. Here's what makes eSignTap special:
+        You\'ve just unlocked a smarter way to schedule meetings. Here\'s what makes eSignTap special:
       </p>
 
       <!-- Feature Grid -->
       <div style="display: grid; gap: 20px; margin-bottom: 32px;">
         <!-- AI Scheduling -->
         <div style="padding: 16px; background-color: #F3F4F6; border-radius: 8px; border-left: 4px solid #4F46E5;">
-          <h3 style="color: #1F2937; margin: 0 0 8px 0;">🤖 AI-Powered Scheduling</h3>
+          <h3 style="color: #1F2937; margin: 0 0 8px 0;">AI-Powered Scheduling</h3>
           <p style="color: #6B7280; margin: 0;">Smart scheduling that learns your preferences and suggests optimal meeting times.</p>
         </div>
 
         <!-- WhatsApp Integration -->
         <div style="padding: 16px; background-color: #F3F4F6; border-radius: 8px; border-left: 4px solid #10B981;">
-          <h3 style="color: #1F2937; margin: 0 0 8px 0;">📱 WhatsApp Reminders</h3>
+          <h3 style="color: #1F2937; margin: 0 0 8px 0;">WhatsApp Reminders</h3>
           <p style="color: #6B7280; margin: 0;">Get instant notifications and meeting updates right on WhatsApp.</p>
         </div>
 
         <!-- Custom Page -->
         <div style="padding: 16px; background-color: #F3F4F6; border-radius: 8px; border-left: 4px solid #F59E0B;">
-          <h3 style="color: #1F2937; margin: 0 0 8px 0;">🛡️ Create custom page</h3>
+          <h3 style="color: #1F2937; margin: 0 0 8px 0;">Create custom page</h3>
           <p style="color: #6B7280; margin: 0;">Design a more detailed and branded custom page.</p>
         </div>
       </div>
@@ -529,18 +509,19 @@ The eSignTap Team`,
       signingUrl: documentData.signingUrl,
       sentDate: this.formatDate(new Date())
     };
+    const isReminder = !!documentData.isReminder;
 
     console.log('📋 Processed email data:', JSON.stringify(emailData, null, 2));
-    console.log('📧 Email subject:', template.getSubject(documentData.documentTitle));
+    console.log('📧 Email subject:', template.getSubject(documentData.documentTitle, isReminder));
     console.log('📧 Email to:', documentData.signerEmail);
     console.log('=== END EMAIL SERVICE DEBUG ===');
 
     try {
       const result = await this.sendEmail({
         to: documentData.signerEmail,
-        subject: template.getSubject(documentData.documentTitle),
-        text: template.text(emailData),
-        html: template.html(emailData)
+        subject: template.getSubject(documentData.documentTitle, isReminder),
+        text: template.text(emailData, isReminder),
+        html: template.html(emailData, isReminder)
       });
       
       console.log('✅ Email sent successfully from sendDocumentShareEmail:', result);
