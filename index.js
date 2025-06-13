@@ -3645,18 +3645,6 @@ app.get('/api/user/contacts/search', authenticateToken, async (req, res) => {
   }
 });
 
-// Rate limiting middleware
-const rateLimit = require('express-rate-limit');
-
-// Create a limiter for feedback endpoints
-const feedbackLimiter = rateLimit({
-  windowMs: 24 * 60 * 60 * 1000, // 24 hours
-  max: 3, // limit each IP to 3 requests per window
-  message: 'Too many feedback submissions from this IP, please try again later',
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
 // Rate limiting using Firebase
 const checkRateLimit = async (ip) => {
   const now = Date.now();
