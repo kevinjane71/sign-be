@@ -15,6 +15,11 @@ const bcrypt = require('bcrypt');
 const emailService = require('./email');
 const pdfService = require('./pdfService');
 
+const admin = require('firebase-admin');
+
+// Rate limiting middleware
+const rateLimit = require('express-rate-limit');
+
 const app = express();
 const PORT = process.env.PORT || 5001;
 
@@ -3637,5 +3642,137 @@ app.get('/api/user/contacts/search', authenticateToken, async (req, res) => {
     res.json({ success: true, contacts });
   } catch (e) {
     res.status(500).json({ error: 'Failed to search contacts' });
+  }
+});
+
+// Rate limiting middleware
+const rateLimit = require('express-rate-limit');
+
+// Create a limiter for feedback endpoints
+const feedbackLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000, // 24 hours
+  max: 3, // limit each IP to 3 requests per window
+  message: 'Too many feedback submissions from this IP, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Rate limiting using Firebase
+const checkRateLimit = async (ip) => {
+  const now = Date.now();
+  const oneDayAgo = now - (24 * 60 * 60 * 1000);
+  
+  // Get submissions from last 24 hours for this IP
+  const submissionsRef = db.collection('feedback_submissions')
+    .where('ipAddress', '==', ip)
+    .where('timestamp', '>', oneDayAgo);
+  
+  const submissions = await submissionsRef.get();
+  
+  // If more than 3 submissions in 24 hours, reject
+  if (submissions.size >= 3) {
+    return false;
+  }
+  
+  // Record this submission
+  await db.collection('feedback_submissions').add({
+    ipAddress: ip,
+    timestamp: now
+  });
+  
+  return true;
+};
+
+// Feedback API endpoints with serverless rate limiting
+app.post('/api/feedback/rating', async (req, res) => {
+  try {
+    const { sessionId, rating } = req.body;
+    const ip = req.headers['x-forwarded-for'] || req.ip;
+    
+    // Check rate limit
+    const isAllowed = await checkRateLimit(ip);
+    if (!isAllowed) {
+      return res.status(429).json({ message: 'Too many feedback submissions from this IP, please try again later' });
+    }
+    
+    // Validate inputs
+    if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 100) {
+      return res.status(400).json({ message: 'Invalid session ID' });
+    }
+    
+    if (!rating || typeof rating !== 'number' || rating < 1 || rating > 5) {
+      return res.status(400).json({ message: 'Invalid rating value' });
+    }
+
+    // Check if feedback already exists for this session
+    const feedbackRef = db.collection('feedback').where('sessionId', '==', sessionId);
+    const existingFeedback = await feedbackRef.get();
+    
+    if (!existingFeedback.empty) {
+      return res.status(200).json({ message: 'Feedback already recorded' });
+    }
+
+    // Add IP address and timestamp for tracking
+    await db.collection('feedback').add({
+      sessionId,
+      rating,
+      ipAddress: ip,
+      userAgent: req.headers['user-agent'],
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    
+    res.status(200).json({ message: 'Rating feedback recorded' });
+  } catch (error) {
+    console.error('Error saving rating feedback:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+app.post('/api/feedback/pricing', async (req, res) => {
+  try {
+    const { sessionId, pricingFeedback } = req.body;
+    const ip = req.headers['x-forwarded-for'] || req.ip;
+    
+    // Check rate limit
+    const isAllowed = await checkRateLimit(ip);
+    if (!isAllowed) {
+      return res.status(429).json({ message: 'Too many feedback submissions from this IP, please try again later' });
+    }
+    
+    // Validate inputs
+    if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 100) {
+      return res.status(400).json({ message: 'Invalid session ID' });
+    }
+    
+    if (!pricingFeedback || typeof pricingFeedback !== 'string' || pricingFeedback.length > 500) {
+      return res.status(400).json({ message: 'Invalid feedback content' });
+    }
+
+    // Find existing feedback by sessionId
+    const feedbackRef = db.collection('feedback').where('sessionId', '==', sessionId);
+    const existingFeedback = await feedbackRef.get();
+    
+    if (!existingFeedback.empty) {
+      // Update existing feedback
+      const doc = existingFeedback.docs[0];
+      await doc.ref.update({
+        pricingFeedback,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    } else {
+      // Create new feedback
+      await db.collection('feedback').add({
+        sessionId,
+        pricingFeedback,
+        ipAddress: ip,
+        userAgent: req.headers['user-agent'],
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    }
+    
+    res.status(200).json({ message: 'Pricing feedback recorded' });
+  } catch (error) {
+    console.error('Error saving pricing feedback:', error);
+    res.status(500).json({ message: 'Internal server error' });
   }
 });
