@@ -1328,9 +1328,9 @@ app.get('/api/sign/:documentId', async (req, res) => {
         const { fileName, fileUrl, ...rest } = file;
         return {
           ...rest,
-          fields: Array.isArray(file.fields)
-            ? file.fields.filter(field => !field.assignedSigner || field.assignedSigner === currentSignerId)
-            : []
+        fields: Array.isArray(file.fields)
+          ? file.fields.filter(field => !field.assignedSigner || field.assignedSigner === currentSignerId)
+          : []
         };
       });
     }
